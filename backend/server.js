@@ -31,7 +31,7 @@ connectDB();
 
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'https://lifevault-wheat.vercel.app',
+    origin: 'https://lifevault-wheat.vercel.app',
     credentials: true,
   })
 );
