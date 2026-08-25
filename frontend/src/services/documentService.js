@@ -1,6 +1,6 @@
 import api from './api';
 
-const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '');
+const API_BASE = (import.meta.env.VITE_API_URL || 'https://lifevault-nzm0.onrender.com/api').replace(/\/api\/?$/, '');
 
 export const getFileUrl = (fileUrl) => {
   if (!fileUrl) return '';
