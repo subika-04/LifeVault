@@ -20,3 +20,6 @@ export const updateReminder = (id, data) =>
 
 export const deleteReminder = (id) =>
   api.delete(`/reminders/${id}`);
+
+export const reconcilePayments = () =>
+  api.post('/reminders/reconcile-payments');

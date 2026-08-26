@@ -5,6 +5,7 @@ import {
   updateReminder,
   deleteReminder,
 } from '../services/reminderService.js';
+import { reconcilePendingReminders } from '../services/paymentSyncService.js';
 import { PRIORITIES } from '../models/Reminder.js';
 
 export const listReminders = async (req, res, next) => {
@@ -120,6 +121,32 @@ export const deleteReminderHandler = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Reminder deleted successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/reminders/reconcile-payments
+ *
+ * Re-checks every pending reminder for the authenticated user against
+ * their existing expenses and completes any confident, unambiguous
+ * match it finds — covering reminders whose corresponding expense was
+ * recorded before payment-sync existed (or before a matching fix
+ * shipped), without requiring the user to delete/re-add anything.
+ */
+export const reconcilePaymentsHandler = async (req, res, next) => {
+  try {
+    const completedReminders = await reconcilePendingReminders(req.user._id);
+
+    res.status(200).json({
+      success: true,
+      message:
+        completedReminders.length > 0
+          ? `${completedReminders.length} reminder${completedReminders.length === 1 ? '' : 's'} matched to an existing payment and marked completed.`
+          : 'No additional matches found — everything is already in sync.',
+      data: { completedReminders },
     });
   } catch (error) {
     next(error);

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Calendar, Plus, Trash2, Edit2, CheckSquare, Square, AlertCircle, Clock } from 'lucide-react';
-import { getReminders, createReminder, updateReminder, deleteReminder, PRIORITIES } from '../services/reminderService';
+import { Calendar, Plus, Trash2, Edit2, CheckSquare, Square, AlertCircle, Clock, RefreshCw } from 'lucide-react';
+import { getReminders, createReminder, updateReminder, deleteReminder, reconcilePayments, PRIORITIES } from '../services/reminderService';
 import { useToast } from '../context/ToastContext';
 import EmptyState from '../components/EmptyState';
 
@@ -13,6 +13,7 @@ const Reminders = () => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingReminder, setEditingReminder] = useState(null);
+  const [reconciling, setReconciling] = useState(false);
 
   const [form, setForm] = useState({
     title: '',
@@ -49,6 +50,25 @@ const Reminders = () => {
     window.addEventListener('lifevault:reminders-updated', handler);
     return () => window.removeEventListener('lifevault:reminders-updated', handler);
   }, [fetchReminders]);
+
+  // Retroactively re-checks pending reminders against existing expenses —
+  // covers a payment that was recorded before it could auto-match (e.g.
+  // before this feature existed, or before a matching fix shipped).
+  const handleReconcilePayments = async () => {
+    setReconciling(true);
+    try {
+      const { data } = await reconcilePayments();
+      showToast(data.message);
+      if (data.data?.completedReminders?.length > 0) {
+        fetchReminders();
+        window.dispatchEvent(new CustomEvent('lifevault:reminders-updated'));
+      }
+    } catch (err) {
+      showToast(err.response?.data?.message || 'Failed to sync payments', 'error');
+    } finally {
+      setReconciling(false);
+    }
+  };
 
   const handleOpenModal = (reminder = null) => {
     if (reminder) {
@@ -168,10 +188,22 @@ const Reminders = () => {
             {reminders.length > 0 && ` · ${reminders.length} total`}
           </p>
         </div>
-        <button type="button" className="btn btn--primary" onClick={() => handleOpenModal()}>
-          <Plus size={18} />
-          Add Reminder
-        </button>
+        <div style={{ display: 'flex', gap: '0.75rem' }}>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={handleReconcilePayments}
+            disabled={reconciling}
+            title="Re-check pending reminders against your existing expenses — useful if a payment didn't auto-match"
+          >
+            <RefreshCw size={18} className={reconciling ? 'spin' : ''} />
+            {reconciling ? 'Syncing...' : 'Sync Payments'}
+          </button>
+          <button type="button" className="btn btn--primary" onClick={() => handleOpenModal()}>
+            <Plus size={18} />
+            Add Reminder
+          </button>
+        </div>
       </div>
 
       {/* Filters Toolbar */}

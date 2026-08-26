@@ -299,3 +299,53 @@ untouched — `ProtectedRoute` still sends unauthenticated visitors to
 - **Secrets:** the real `.env` files (containing live MongoDB, JWT,
   Gemini, and Cloudinary credentials) were **not** included in the
   delivered ZIP; a `.env.example` placeholder template was added instead.
+
+## Post-Completion Bugfix — Payment Sync (Part 8.1)
+
+**Reported issue.** A live reminder ("Home Electricity Bill", due Sept 10,
+2026) stayed pending/active even after the matching expense (₹1,850, paid
+Aug 26, 2026) was recorded via the AI Assistant's confirmation flow.
+
+**Root cause.** The reminder had been auto-created from a document
+**before** the `amount` field was added to the `Reminder` schema (Part 8).
+Existing MongoDB documents aren't retroactively migrated by a schema
+change, so this reminder's `amount` was `null` — and the matcher
+correctly, deliberately refuses to match on a reminder with an unknown
+amount (that hard requirement is what prevents false positives). The
+matching *logic* was working as designed; the *data* was stale.
+
+**Fix — forward direction.** `findMatchingReminder` now falls back to the
+linked source Document's `aiData.amount` whenever a candidate reminder's
+own `amount` is `null` (only for `source: 'document'` reminders, which are
+the only ones with a document to fall back to). When that fallback
+resolves a real amount, the reminder is opportunistically self-healed —
+its `amount` field is backfilled in the same request — so this lookup is
+only needed once per legacy reminder, not on every future expense.
+
+**Fix — retroactive reconciliation.** Because the stuck reminder's expense
+had *already* been recorded (before this fix shipped), the forward-only
+fix alone can't resolve it — forward matching only runs at expense-creation
+time. Added a reverse-direction reconciler:
+- `paymentSyncService.reconcilePendingReminders(userId)` re-checks every
+  pending reminder against the user's own existing, not-yet-linked
+  expenses, using the identical amount/date-window/keyword-overlap/
+  ambiguity-guard rules as the forward matcher (same conservative
+  thresholds — no relaxed matching just because it's retroactive).
+- New endpoint: `POST /api/reminders/reconcile-payments` (protected,
+  scoped to `req.user`).
+- New "Sync Payments" button on the Reminders page (next to Add Reminder)
+  calls it, shows the result via toast (e.g. "1 reminder matched to an
+  existing payment and marked completed."), and refreshes both the
+  Reminders list and the Dashboard via the existing
+  `lifevault:reminders-updated` event.
+- Idempotent and safe to run repeatedly: only touches
+  `isCompleted: false` reminders and `linkedReminder: null` expenses, so
+  an expense already resolved to a different reminder can never be
+  "stolen".
+
+**Verification.** Re-ran the matching logic against the exact reported
+scenario in a standalone harness (reminder: amount `null`, linked document
+`aiData.amount: 1850`; expense: ₹1,850, "Home Electricity Bill", paid 15
+days before the Sept 10 due date) — now scores 0.5 similarity and matches,
+where it previously returned no match. `npm run build` and backend
+boot/syntax checks re-run clean after this patch.
