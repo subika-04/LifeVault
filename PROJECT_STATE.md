@@ -349,3 +349,62 @@ scenario in a standalone harness (reminder: amount `null`, linked document
 days before the Sept 10 due date) — now scores 0.5 similarity and matches,
 where it previously returned no match. `npm run build` and backend
 boot/syntax checks re-run clean after this patch.
+
+## Post-Completion Bugfix — Payment Sync (Part 8.2)
+
+**Reported follow-up.** After deploying 8.1, "Sync Payments" reported
+"everything already in sync" for the old stuck reminder, and a **brand
+new** document-generated reminder + its matching expense also failed to
+auto-link.
+
+**Root cause — text-overlap was too literal.** The matcher required an
+*exact* token match between the reminder's title and the expense
+description after stopword removal. Real usage rarely uses the same
+literal wording as the AI-generated title (e.g. a reminder auto-titled
+"Pay electricity bill" vs. everyday Indian usage like "EB bill", "current
+bill", or "power bill" for an expense description) — zero literal token
+overlap, so the hard text-similarity gate rejected a genuinely correct
+match. This was a real gap in the matcher, separate from the amount-
+fallback issue fixed in 8.1.
+
+**Fix.**
+- Added a synonym table for common bill categories (electricity/electric/
+  power/current/EB, internet/wifi/broadband/ISP, water, gas/LPG/cylinder,
+  rent/rental/lease, insurance/policy/premium, phone/mobile/recharge,
+  credit card, loan/EMI, DTH/cable/TV, maintenance/society, school/
+  tuition/fees) — tokens are normalized to a canonical form before
+  comparison, so "power bill" and "electricity bill" now overlap.
+- Added fuzzy prefix matching (tokens ≥5 chars where one is a prefix of
+  the other) to absorb simple pluralization/inflection differences
+  outside the synonym table.
+- Allowed short recognized abbreviations (e.g. "EB") through the
+  minimum-token-length filter, which previously discarded anything
+  under 3 characters regardless of meaning.
+- Slightly lowered the similarity threshold (0.2 → 0.15) now that the
+  signal itself is more accurate, without reopening the door to false
+  positives — TEST 2 (unrelated same-amount expense) and the ambiguity
+  guard were both re-verified to still correctly reject a match.
+- `reconcilePendingReminders` now returns `{ completed, skippedNoAmount }`
+  instead of a bare list. `POST /api/reminders/reconcile-payments`
+  distinguishes three outcomes and reports which one occurred: reminders
+  completed, reminders that have **no known amount at all** (named
+  explicitly, up to 3, with guidance to add a Bill Amount via Edit and
+  sync again), or genuinely nothing left to do. This replaces a silent,
+  unhelpful "already in sync" for the common case where a reminder
+  simply has no amount to match against (typically a manually-created
+  reminder with no document to fall back to).
+
+**Verification.** Re-ran the full required test suite plus new colloquial-
+wording cases in a standalone harness: 10/10 passed, including "EB bill",
+"current bill", and "power bill" all now correctly matching an
+"electricity bill" reminder, while an unrelated "grocery shopping" expense
+at the same amount still correctly does not match, and the ambiguous-
+identical-reminders guard still correctly refuses to auto-resolve.
+`npm run build` and backend boot/syntax checks re-run clean after this
+patch.
+
+**If a reminder still won't sync:** it very likely has no bill amount at
+all (not document-sourced, or its source document had no extractable
+amount) — the reconcile response will now say so by name. Open that
+reminder's Edit modal, fill in "Bill Amount (₹)", save, and click "Sync
+Payments" again.

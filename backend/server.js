@@ -31,7 +31,7 @@ connectDB();
 
 app.use(
   cors({
-    origin: 'https://lifevault-wheat.vercel.app',
+    origin: 'https://lifevault-lbmer19ay-subikas-projects.vercel.app',
     credentials: true,
   })
 );

@@ -45,32 +45,77 @@ const STOPWORDS = new Set([
   'bill', 'bills', 'payment', 'payments', 'pay', 'paid', 'due', 'the', 'for',
   'of', 'an', 'to', 'on', 'fee', 'fees', 'charge', 'charges', 'renewal',
   'renew', 'invoice', 'subscription', 'and', 'monthly', 'yearly', 'annual',
-  'action', 'required', 'auto', 'generated', 'from',
+  'action', 'required', 'auto', 'generated', 'from', 'card', 'account',
 ]);
+
+// Common colloquial/synonym groups for bill categories, so wording that
+// differs from the AI-extracted document type (e.g. a reminder titled
+// "Pay electricity bill" vs. an expense the user described as "EB bill"
+// or "current bill" — everyday Indian usage) still overlaps instead of
+// silently failing a literal-token match. Each group normalizes to its
+// first entry.
+const SYNONYM_GROUPS = [
+  ['electricity', 'electric', 'power', 'current', 'eb', 'lighting'],
+  ['internet', 'wifi', 'broadband', 'isp', 'fiber', 'fibre'],
+  ['water', 'municipal', 'corporation'],
+  ['gas', 'lpg', 'cylinder', 'png'],
+  ['rent', 'rental', 'lease', 'landlord'],
+  ['insurance', 'policy', 'premium'],
+  ['phone', 'mobile', 'recharge', 'postpaid', 'prepaid', 'sim', 'telecom'],
+  ['creditcard', 'card', 'cc'],
+  ['loan', 'emi', 'installment', 'installments'],
+  ['dth', 'cable', 'television', 'tv'],
+  ['maintenance', 'society', 'apartment', 'flat'],
+  ['school', 'college', 'tuition', 'fees'],
+];
+
+const SYNONYM_MAP = new Map();
+SYNONYM_GROUPS.forEach(([canonical, ...rest]) => {
+  SYNONYM_MAP.set(canonical, canonical);
+  rest.forEach((word) => SYNONYM_MAP.set(word, canonical));
+});
+
+const normalizeToken = (word) => SYNONYM_MAP.get(word) || word;
 
 const tokenize = (text) =>
   String(text || '')
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
-    .filter((word) => word.length > 2 && !STOPWORDS.has(word));
+    .filter((word) => (word.length > 2 || SYNONYM_MAP.has(word)) && !STOPWORDS.has(word))
+    .map(normalizeToken);
+
+/**
+ * Two tokens are considered the same signal if they're identical, or if
+ * one is a substantial (>=5 char) prefix of the other — catches simple
+ * pluralization/inflection ("insurance"/"insurances",
+ * "electricity"/"electricit-y-bill") that literal equality misses,
+ * without being loose enough to conflate unrelated short words.
+ */
+const tokensMatch = (a, b) => {
+  if (a === b) return true;
+  if (a.length >= 5 && b.length >= 5) {
+    return a.startsWith(b) || b.startsWith(a);
+  }
+  return false;
+};
 
 const jaccardSimilarity = (tokensA, tokensB) => {
-  const setA = new Set(tokensA);
-  const setB = new Set(tokensB);
-  if (setA.size === 0 || setB.size === 0) return 0;
+  const setA = [...new Set(tokensA)];
+  const setB = [...new Set(tokensB)];
+  if (setA.length === 0 || setB.length === 0) return 0;
 
   let intersection = 0;
-  for (const token of setA) {
-    if (setB.has(token)) intersection += 1;
+  for (const tokenA of setA) {
+    if (setB.some((tokenB) => tokensMatch(tokenA, tokenB))) intersection += 1;
   }
-  const union = new Set([...setA, ...setB]).size;
-  return union === 0 ? 0 : intersection / union;
+  const unionSize = new Set([...setA, ...setB]).size;
+  return unionSize === 0 ? 0 : intersection / unionSize;
 };
 
 // Tuning constants — deliberately conservative to avoid false matches.
 const AMOUNT_TOLERANCE = 1; // rupees — survives paise rounding
-const TEXT_SIMILARITY_THRESHOLD = 0.2;
+const TEXT_SIMILARITY_THRESHOLD = 0.15;
 const AMBIGUITY_MARGIN = 0.08; // best must beat runner-up by at least this
 const DAYS_BEFORE_DUE_ALLOWED = 21; // paying a bit ahead of the due date
 const DAYS_AFTER_DUE_ALLOWED = 45; // paying somewhat late is still a match
@@ -281,11 +326,15 @@ const findMatchingExpenseForReminder = async (userId, reminder, effectiveAmount)
  * unambiguous match. Safe to call repeatedly — already-linked expenses
  * and already-completed reminders are never touched twice.
  *
- * Returns the list of reminders that were completed by this run.
+ * Returns `{ completed, skippedNoAmount }` — `skippedNoAmount` lists
+ * reminders that could never be matched because they (and, if
+ * document-sourced, their source document) have no known amount, so
+ * the caller can point the user at exactly what to fix instead of a
+ * silent "nothing happened".
  */
 export const reconcilePendingReminders = async (userId) => {
   const pendingReminders = await Reminder.find({ user: userId, isCompleted: false });
-  if (pendingReminders.length === 0) return [];
+  if (pendingReminders.length === 0) return { completed: [], skippedNoAmount: [] };
 
   // Reuse the same document-amount fallback as the forward direction so
   // legacy document-sourced reminders (amount: null) are reconcilable too.
@@ -303,9 +352,16 @@ export const reconcilePendingReminders = async (userId) => {
   }
 
   const completed = [];
+  const skippedNoAmount = [];
 
   for (const reminder of pendingReminders) {
     const effectiveAmount = reminder.amount != null ? reminder.amount : amountByDocumentId.get(String(reminder.document)) ?? null;
+
+    if (effectiveAmount == null) {
+      skippedNoAmount.push({ _id: reminder._id, title: reminder.title });
+      continue;
+    }
+
     const matchedExpense = await findMatchingExpenseForReminder(userId, reminder, effectiveAmount);
     if (!matchedExpense) continue;
 
@@ -331,5 +387,5 @@ export const reconcilePendingReminders = async (userId) => {
     }
   }
 
-  return completed;
+  return { completed, skippedNoAmount };
 };

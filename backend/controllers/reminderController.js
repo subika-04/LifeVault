@@ -138,15 +138,24 @@ export const deleteReminderHandler = async (req, res, next) => {
  */
 export const reconcilePaymentsHandler = async (req, res, next) => {
   try {
-    const completedReminders = await reconcilePendingReminders(req.user._id);
+    const { completed, skippedNoAmount } = await reconcilePendingReminders(req.user._id);
+
+    let message;
+    if (completed.length > 0) {
+      message = `${completed.length} reminder${completed.length === 1 ? '' : 's'} matched to an existing payment and marked completed.`;
+    } else if (skippedNoAmount.length > 0) {
+      message = `No matches yet. ${skippedNoAmount.length} pending reminder${skippedNoAmount.length === 1 ? '' : 's'} — "${skippedNoAmount
+        .slice(0, 3)
+        .map((r) => r.title)
+        .join('", "')}"${skippedNoAmount.length > 3 ? ', ...' : ''} — ${skippedNoAmount.length === 1 ? 'has' : 'have'} no bill amount set, so ${skippedNoAmount.length === 1 ? "it can't" : "they can't"} be auto-matched yet. Edit ${skippedNoAmount.length === 1 ? 'it' : 'them'} to add a Bill Amount, then sync again.`;
+    } else {
+      message = 'No additional matches found — everything is already in sync.';
+    }
 
     res.status(200).json({
       success: true,
-      message:
-        completedReminders.length > 0
-          ? `${completedReminders.length} reminder${completedReminders.length === 1 ? '' : 's'} matched to an existing payment and marked completed.`
-          : 'No additional matches found — everything is already in sync.',
-      data: { completedReminders },
+      message,
+      data: { completedReminders: completed, skippedNoAmount },
     });
   } catch (error) {
     next(error);
