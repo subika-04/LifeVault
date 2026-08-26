@@ -32,6 +32,10 @@ export const createReminder = async (userId, reminderData) => {
     dueDate: reminderData.dueDate,
     priority: reminderData.priority || 'Medium',
     isCompleted: reminderData.isCompleted || false,
+    amount:
+      reminderData.amount !== undefined && reminderData.amount !== null && reminderData.amount !== ''
+        ? Number(reminderData.amount)
+        : null,
   });
   return reminder;
 };
@@ -43,7 +47,22 @@ export const updateReminder = async (userId, reminderId, reminderData) => {
   if (reminderData.description !== undefined) reminder.description = reminderData.description;
   if (reminderData.dueDate !== undefined) reminder.dueDate = reminderData.dueDate;
   if (reminderData.priority !== undefined) reminder.priority = reminderData.priority;
-  if (reminderData.isCompleted !== undefined) reminder.isCompleted = reminderData.isCompleted;
+  if (reminderData.amount !== undefined) {
+    reminder.amount =
+      reminderData.amount === null || reminderData.amount === '' ? null : Number(reminderData.amount);
+  }
+  if (reminderData.isCompleted !== undefined) {
+    reminder.isCompleted = reminderData.isCompleted;
+    if (reminderData.isCompleted) {
+      // Manual completion — only stamp completedAt if not already set by
+      // the payment-sync engine (don't overwrite an automatic completion).
+      if (!reminder.completedAt) reminder.completedAt = new Date();
+    } else {
+      // Reopening a reminder clears any prior completion trail.
+      reminder.completedAt = null;
+      reminder.completedByExpense = null;
+    }
+  }
 
   await reminder.save();
   return reminder;
@@ -94,6 +113,9 @@ const buildReminderPlan = (document) => {
       description: aiData.summary || `Auto-generated from ${document.fileName || document.title}.`,
       dueDate: aiData.dueDate,
       priority: 'High',
+      // Carries the bill amount through so payment-sync can later match
+      // a recorded Expense back to this reminder (see paymentSyncService).
+      amount: aiData.amount != null ? aiData.amount : null,
     };
   }
 
@@ -108,6 +130,7 @@ const buildReminderPlan = (document) => {
       description: aiData.summary || `Auto-generated from ${document.fileName || document.title}.`,
       dueDate: aiData.warrantyExpiryDate,
       priority: 'Medium',
+      amount: null,
     };
   }
 
@@ -153,6 +176,7 @@ export const createReminderFromDocument = async (userId, document) => {
       description: plan.description,
       dueDate: plan.dueDate,
       priority: plan.priority,
+      amount: plan.amount != null ? plan.amount : null,
       isCompleted: false,
       source: 'document',
       document: document._id,

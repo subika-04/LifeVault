@@ -66,7 +66,7 @@ export const createExpenseHandler = async (req, res, next) => {
       });
     }
 
-    const expense = await createExpense(req.user._id, {
+    const { expense, matchedReminder } = await createExpense(req.user._id, {
       amount: Number(amount),
       category,
       description,
@@ -76,7 +76,13 @@ export const createExpenseHandler = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      data: { expense },
+      message: matchedReminder
+        ? 'Payment recorded. Related reminder marked as completed.'
+        : 'Expense added successfully',
+      data: {
+        expense,
+        matchedReminder: matchedReminder || null,
+      },
     });
   } catch (error) {
     next(error);

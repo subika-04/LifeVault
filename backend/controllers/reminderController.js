@@ -36,7 +36,7 @@ export const getReminder = async (req, res, next) => {
 
 export const createReminderHandler = async (req, res, next) => {
   try {
-    const { title, description, dueDate, priority, isCompleted } = req.body;
+    const { title, description, dueDate, priority, isCompleted, amount } = req.body;
 
     if (!title || !dueDate) {
       return res.status(400).json({
@@ -52,12 +52,20 @@ export const createReminderHandler = async (req, res, next) => {
       });
     }
 
+    if (amount !== undefined && amount !== null && amount !== '' && Number(amount) < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount cannot be negative',
+      });
+    }
+
     const reminder = await createReminder(req.user._id, {
       title,
       description,
       dueDate,
       priority,
       isCompleted,
+      amount,
     });
 
     res.status(201).json({
@@ -71,12 +79,19 @@ export const createReminderHandler = async (req, res, next) => {
 
 export const updateReminderHandler = async (req, res, next) => {
   try {
-    const { title, description, dueDate, priority, isCompleted } = req.body;
+    const { title, description, dueDate, priority, isCompleted, amount } = req.body;
 
     if (priority && !PRIORITIES.includes(priority)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid priority value',
+      });
+    }
+
+    if (amount !== undefined && amount !== null && amount !== '' && Number(amount) < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount cannot be negative',
       });
     }
 
@@ -86,6 +101,7 @@ export const updateReminderHandler = async (req, res, next) => {
       dueDate,
       priority,
       isCompleted,
+      amount,
     });
 
     res.status(200).json({

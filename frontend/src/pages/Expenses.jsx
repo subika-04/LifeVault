@@ -123,8 +123,13 @@ const Expenses = () => {
         await updateExpense(editingExpense._id, payload);
         showToast('Expense updated successfully');
       } else {
-        await createExpense(payload);
-        showToast('Expense added successfully');
+        const { data } = await createExpense(payload);
+        showToast(data.message || 'Expense added successfully');
+        if (data.data?.matchedReminder) {
+          // Let Reminders/Dashboard (if mounted) refresh live instead of
+          // requiring a manual reload — see Part 8, Payment -> Reminder sync.
+          window.dispatchEvent(new CustomEvent('lifevault:reminders-updated'));
+        }
       }
       handleCloseModal();
       fetchExpenses();

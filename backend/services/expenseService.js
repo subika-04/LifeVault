@@ -1,4 +1,5 @@
 import Expense from '../models/Expense.js';
+import { syncReminderForExpense } from './paymentSyncService.js';
 
 export const getExpenses = async (userId, { category, search, startDate, endDate } = {}) => {
   const query = { user: userId };
@@ -44,7 +45,22 @@ export const createExpense = async (userId, expenseData) => {
     date: expenseData.date || new Date(),
     paymentMethod: expenseData.paymentMethod || 'Card',
   });
-  return expense;
+
+  // Part 8 — Payment -> Reminder sync. Never allowed to fail expense
+  // creation: if matching throws for any reason, the expense still
+  // stands and we simply report no match.
+  let matchedReminder = null;
+  try {
+    matchedReminder = await syncReminderForExpense(userId, expense);
+    if (matchedReminder) {
+      expense.linkedReminder = matchedReminder._id;
+      await expense.save();
+    }
+  } catch (err) {
+    matchedReminder = null;
+  }
+
+  return { expense, matchedReminder };
 };
 
 export const updateExpense = async (userId, expenseId, expenseData) => {

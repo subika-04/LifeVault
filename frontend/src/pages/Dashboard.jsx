@@ -76,6 +76,14 @@ const Dashboard = () => {
     loadInsights();
   }, [loadStats, loadInsights]);
 
+  // Part 8 — Payment -> Reminder sync: keep dashboard counts (urgent
+  // alerts, Needs Your Attention) live without a manual page reload.
+  useEffect(() => {
+    const handler = () => loadStats();
+    window.addEventListener('lifevault:reminders-updated', handler);
+    return () => window.removeEventListener('lifevault:reminders-updated', handler);
+  }, [loadStats]);
+
   const chartData = (stats?.categoryBreakdown || []).map((c) => ({
     name: CATEGORY_LABELS[c.category] || c.category,
     count: c.count,

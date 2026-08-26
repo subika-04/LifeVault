@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
+import Welcome from './pages/Welcome';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
@@ -34,8 +35,28 @@ const GuestRoute = ({ children }) => {
   return children;
 };
 
+const NotFoundRedirect = () => {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="loading-screen">
+        <div className="loading-spinner" />
+        <p>Loading LifeVault...</p>
+      </div>
+    );
+  }
+
+  return <Navigate to={user ? '/dashboard' : '/'} replace />;
+};
+
 const AppRoutes = () => (
   <Routes>
+    {/* Public landing page. Authenticated users may still view it (e.g. via
+        a bookmark) — it offers a "Go to Dashboard" action instead of
+        force-redirecting, so there's no redirect loop. */}
+    <Route path="/" element={<Welcome />} />
+
     <Route
       path="/login"
       element={
@@ -46,6 +67,16 @@ const AppRoutes = () => (
     />
     <Route
       path="/register"
+      element={
+        <GuestRoute>
+          <Register />
+        </GuestRoute>
+      }
+    />
+    {/* Alias so links written as /signup (marketing copy, docs, etc.)
+        resolve to the same signup flow without duplicating logic. */}
+    <Route
+      path="/signup"
       element={
         <GuestRoute>
           <Register />
@@ -67,8 +98,7 @@ const AppRoutes = () => (
       </Route>
     </Route>
 
-    <Route path="/" element={<Navigate to="/dashboard" replace />} />
-    <Route path="*" element={<Navigate to="/dashboard" replace />} />
+    <Route path="*" element={<NotFoundRedirect />} />
   </Routes>
 );
 

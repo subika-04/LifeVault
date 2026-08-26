@@ -19,6 +19,7 @@ const Reminders = () => {
     description: '',
     dueDate: '',
     priority: 'Medium',
+    amount: '',
   });
 
   const fetchReminders = useCallback(async () => {
@@ -40,6 +41,15 @@ const Reminders = () => {
     fetchReminders();
   }, [fetchReminders]);
 
+  // Part 8 — Payment -> Reminder sync: if an expense recorded elsewhere in
+  // the app auto-completed a reminder, refresh this list live instead of
+  // requiring a manual reload.
+  useEffect(() => {
+    const handler = () => fetchReminders();
+    window.addEventListener('lifevault:reminders-updated', handler);
+    return () => window.removeEventListener('lifevault:reminders-updated', handler);
+  }, [fetchReminders]);
+
   const handleOpenModal = (reminder = null) => {
     if (reminder) {
       setEditingReminder(reminder);
@@ -48,6 +58,7 @@ const Reminders = () => {
         description: reminder.description || '',
         dueDate: reminder.dueDate ? new Date(reminder.dueDate).toISOString().split('T')[0] : '',
         priority: reminder.priority || 'Medium',
+        amount: reminder.amount != null ? reminder.amount : '',
       });
     } else {
       setEditingReminder(null);
@@ -56,6 +67,7 @@ const Reminders = () => {
         description: '',
         dueDate: '',
         priority: 'Medium',
+        amount: '',
       });
     }
     setModalOpen(true);
@@ -80,11 +92,16 @@ const Reminders = () => {
 
     setSubmitting(true);
     try {
+      const payload = {
+        ...form,
+        amount: form.amount === '' ? null : Number(form.amount),
+      };
+
       if (editingReminder) {
-        await updateReminder(editingReminder._id, form);
+        await updateReminder(editingReminder._id, payload);
         showToast('Reminder updated successfully');
       } else {
-        await createReminder(form);
+        await createReminder(payload);
         showToast('Reminder created successfully');
       }
       handleCloseModal();
@@ -272,6 +289,15 @@ const Reminders = () => {
                           Auto · Document
                         </span>
                       )}
+                      {reminder.isCompleted && reminder.completedByExpense && (
+                        <span
+                          className="badge badge--success"
+                          style={{ fontSize: '0.7rem', padding: '1px 6px' }}
+                          title="Automatically completed when a matching expense was recorded"
+                        >
+                          Auto · Paid
+                        </span>
+                      )}
                     </div>
                   </div>
                   {reminder.description && (
@@ -283,6 +309,11 @@ const Reminders = () => {
 
                 {/* Meta & Actions */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+                  {reminder.amount != null && (
+                    <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-text)' }}>
+                      {new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(reminder.amount)}
+                    </span>
+                  )}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
                     <Calendar size={14} />
                     <span>
@@ -388,6 +419,21 @@ const Reminders = () => {
                     ))}
                   </select>
                 </div>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="amount">Bill Amount (₹) — optional</label>
+                <input
+                  id="amount"
+                  name="amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="form-input"
+                  value={form.amount}
+                  onChange={handleChange}
+                  placeholder="e.g. 750 — lets LifeVault auto-match a future payment"
+                />
               </div>
 
               <div className="modal__actions">

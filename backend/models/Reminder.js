@@ -57,6 +57,27 @@ const reminderSchema = new mongoose.Schema(
       ref: 'Document',
       default: null,
     },
+    // ---- Payment -> Reminder synchronization (Part 8) ----
+    // Optional bill amount. Populated automatically for document-sourced
+    // reminders (from aiData.amount) and optionally settable by the user
+    // for manual bill reminders. Used as one of several matching signals
+    // when an expense is recorded — never the only one.
+    amount: {
+      type: Number,
+      default: null,
+      min: [0, 'Amount cannot be negative'],
+    },
+    completedAt: {
+      type: Date,
+      default: null,
+    },
+    // The Expense that caused this reminder to be auto-completed by the
+    // payment-sync engine. Null for reminders completed manually.
+    completedByExpense: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Expense',
+      default: null,
+    },
   },
   {
     timestamps: true,

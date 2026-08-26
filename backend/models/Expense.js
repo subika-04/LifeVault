@@ -60,6 +60,14 @@ const expenseSchema = new mongoose.Schema(
       },
       default: 'Card',
     },
+    // ---- Payment -> Reminder synchronization (Part 8) ----
+    // Set automatically (never by the client) when this expense is
+    // matched to a pending bill reminder, which is completed as a result.
+    linkedReminder: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Reminder',
+      default: null,
+    },
   },
   {
     timestamps: true,
