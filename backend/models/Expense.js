@@ -60,9 +60,23 @@ const expenseSchema = new mongoose.Schema(
       },
       default: 'Card',
     },
-    // ---- Payment -> Reminder synchronization (Part 8) ----
-    // Set automatically (never by the client) when this expense is
-    // matched to a pending bill reminder, which is completed as a result.
+    // ---- Bill payment workflow (Part 9) ----
+    // Set only by the explicit "I Have Paid This Bill" confirmation flow
+    // (billPaymentService.markBillAsPaid) — never inferred or guessed.
+    // linkedReminder deliberately keeps a historical reference even
+    // though the Reminder itself is deleted once paid (see
+    // Reminder -> DELETE in the payment workflow) — it's an audit trail,
+    // not a live relationship, so it's fine for it to no longer resolve.
+    sourceType: {
+      type: String,
+      enum: ['MANUAL', 'BILL_PAYMENT'],
+      default: 'MANUAL',
+    },
+    sourceDocumentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Document',
+      default: null,
+    },
     linkedReminder: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Reminder',
@@ -76,6 +90,7 @@ const expenseSchema = new mongoose.Schema(
 
 expenseSchema.index({ user: 1, date: -1 });
 expenseSchema.index({ user: 1, category: 1 });
+expenseSchema.index({ user: 1, sourceDocumentId: 1 });
 
 const Expense = mongoose.model('Expense', expenseSchema);
 

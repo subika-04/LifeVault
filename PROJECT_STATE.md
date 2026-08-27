@@ -3,7 +3,8 @@
 ## Current Status
 
 PROJECT COMPLETE ✅ (ALL PARTS 1–6 VERIFIED COMPLETE)
-POST-COMPLETION ENHANCEMENTS ✅ (Payment → Reminder Sync + Animated Welcome Page — VERIFIED)
+POST-COMPLETION ENHANCEMENTS ✅ (Animated Welcome Page — VERIFIED)
+PAYMENT WORKFLOW ✅ (Part 9 — Explicit "I Have Paid This Bill" confirmation flow; supersedes and replaces Part 8's automatic matching — VERIFIED)
 
 ## Completed Parts
 
@@ -117,11 +118,18 @@ POST-COMPLETION ENHANCEMENTS ✅ (Payment → Reminder Sync + Animated Welcome P
 ---
 
 ## Latest Checkpoint
-`LifeVault_PART8_PAYMENT_SYNC_AND_LANDING_COMPLETE.zip`
+`LifeVault_PART9_BILL_PAYMENT_WORKFLOW_COMPLETE.zip`
 
 ## Post-Completion Enhancements
 
 ### Payment → Reminder Synchronization (Part 8)
+
+> **⚠️ Superseded and removed in Part 9.** This automatic amount/date/
+> keyword-overlap matching approach (and its 8.1/8.2 fixes below) was
+> replaced by the explicit "I Have Paid This Bill" confirmation flow —
+> see the Part 9 section further down. `paymentSyncService.js` no longer
+> exists in the codebase. This section is kept for historical context on
+> what was tried and why it was replaced.
 
 **Implementation.** New `backend/services/paymentSyncService.js` matches a
 newly-created Expense against the authenticated user's pending (`isCompleted:
@@ -408,3 +416,177 @@ all (not document-sourced, or its source document had no extractable
 amount) — the reconcile response will now say so by name. Open that
 reminder's Edit modal, fill in "Bill Amount (₹)", save, and click "Sync
 Payments" again.
+
+## Post-Completion Enhancement — Explicit Bill Payment Workflow (Part 9)
+
+**This replaces Part 8's automatic fuzzy-matching entirely**, per explicit
+request: "Do NOT automatically synchronize/delete reminders merely
+because an expense exists." Every bill reminder now has exactly one
+resolution path: the user clicking **"I Have Paid This Bill"** and
+confirming. No expense creation anywhere else in the app ever touches a
+reminder implicitly.
+
+### What was removed
+- `backend/services/paymentSyncService.js` (the Part 8 amount/date/
+  keyword-overlap matcher) — deleted.
+- The automatic `syncReminderForExpense` call inside
+  `expenseService.createExpense` — removed; plain expense creation is
+  back to a simple, predictable CRUD operation with no side effects on
+  reminders.
+- `POST /api/reminders/reconcile-payments` and the "Sync Payments" button
+  on the Reminders page — removed, since there's no automatic state to
+  reconcile anymore.
+
+### New workflow
+
+```
+Bill reminder (has an amount)
+   ↓
+"I Have Paid This Bill" button
+   ↓
+Confirmation dialog (amount/date/category — pre-filled, editable)
+   ↓
+"Yes, I Paid It"
+   ↓
+POST /api/reminders/:id/mark-paid
+   ↓
+MongoDB transaction:
+   Document.paymentStatus → 'paid'
+   Expense created (sourceType: BILL_PAYMENT)
+   Reminder deleted (not marked complete — removed outright)
+   ↓
+Frontend refetches + dispatches lifevault:reminders-updated
+   ↓
+Dashboard counts and AI assistant context (both query MongoDB live)
+reflect the change immediately, with no AI-specific code changes needed.
+```
+
+### Files changed
+- **New:** `backend/services/billPaymentService.js` — the whole payment
+  workflow: `markBillAsPaid`, `mapToExpenseCategory`,
+  `findExistingPaymentExpense`.
+- **Models:**
+  - `Document`: added `paymentStatus` (`'due' | 'paid'`, default `'due'`)
+    and `paidAt` (Date). Only meaningful for bill-type documents (ones
+    with `aiData.dueDate`); irrelevant document types are unaffected.
+  - `Expense`: added `sourceType` (`'MANUAL' | 'BILL_PAYMENT'`, default
+    `'MANUAL'`) and `sourceDocumentId` (ref `Document`). `linkedReminder`
+    kept from Part 8 as a historical/audit reference — it deliberately
+    won't resolve via `.populate()` once the reminder is deleted, which
+    is expected and harmless.
+  - `Reminder`: `amount`/`source`/`document` fields from Part 8 kept
+    (still used to identify which reminders are bill-like and to
+    pre-fill the confirmation dialog); `isCompleted`/`completedAt`/
+    `completedByExpense` remain for non-bill, plain to-do reminders only.
+- **Controllers/routes:** `POST /api/reminders/:id/mark-paid` →
+  `reminderController.markBillPaidHandler` →
+  `reminderRoutes.js`. `expenseController`/`expenseService` reverted to
+  plain CRUD (no matching side effects).
+- **Frontend:**
+  - `Reminders.jsx` — bill-like reminders (`amount != null` or
+    `source === 'document'`) show an "I Have Paid This Bill" button
+    instead of the plain complete checkbox; a confirmation dialog
+    collects/edits amount, payment date, and category before submitting;
+    non-bill reminders keep the original complete/reopen checkbox
+    unchanged.
+  - `DocumentCard.jsx` — bill-type documents (`aiData.dueDate` present)
+    now show a Paid/Due badge sourced from `document.paymentStatus`.
+  - `reminderService.js` — `markReminderPaid(id, { amount, date,
+    category, paymentMethod })`.
+
+### Payment workflow detail
+1. `markBillAsPaid` pre-checks the linked Document's `paymentStatus`
+   before opening a transaction — if already `'paid'`, returns
+   `{ alreadyPaid: true, expense, document }` immediately without
+   touching anything.
+2. Inside a MongoDB transaction (this deployment's `MONGO_URI` is an
+   Atlas SRV cluster, i.e. a replica set, so transactions are supported):
+   re-locks the reminder and, if document-sourced, the document; if the
+   document was marked paid between the pre-check and now (a race), the
+   transaction throws a sentinel and the outer function returns the same
+   `alreadyPaid` shape instead of creating a duplicate.
+3. Creates the Expense (`sourceType: 'BILL_PAYMENT'`), marks the Document
+   `paid`, deletes the Reminder — all inside the same transaction, so a
+   failure partway through rolls back everything (satisfies §11: never a
+   partial state — reminder stays active, no partial expense, bill not
+   incorrectly marked paid).
+4. If transactions genuinely aren't supported (`err.code === 20` /
+   "Transaction numbers" / "replica set" in the error), falls back to a
+   sequential best-effort path with the same idempotency pre-checks —
+   documented as not expected to run against this app's actual Atlas
+   deployment.
+
+### Duplicate-prevention mechanism
+- **Document-level idempotency:** once `paymentStatus === 'paid'`, any
+  further `mark-paid` call for that bill returns the existing expense
+  instead of creating a new one — covers the "click the button on an
+  already-paid bill" case even after the reminder itself is long gone.
+- **Reminder-deletion-as-claim:** because the reminder is deleted inside
+  the same transaction that creates the expense, a near-simultaneous
+  double click can only succeed once — the second transaction either
+  sees the document already `paid` (same-transaction ordering) or finds
+  the reminder gone (`Reminder.findOne` returns null), and
+  `session.withTransaction`'s built-in retry-on-transient-error handles
+  the interleaved-write-conflict case automatically. Either way the
+  controller reports a friendly "already marked as paid — no duplicate
+  payment was recorded" rather than erroring or duplicating.
+
+### AI synchronization
+No AI-specific code changes were needed. `insightService.buildUserContext`
+(used by both the grounded chat assistant and dashboard insights) already
+queries `Document`, `Expense`, and `Reminder` directly from MongoDB on
+every call — it now also surfaces `paymentStatus` for bill-type documents
+and `source=Bill Payment` for `BILL_PAYMENT`-sourced expenses in the
+context text sent to Gemini, so a paid bill's document shows
+`paymentStatus=Paid`, its expense is present and clearly tagged, and its
+reminder is simply absent (deleted) rather than needing a special "don't
+mention this" instruction.
+
+### Tests performed
+- `mapToExpenseCategory` verified against a standalone harness mirroring
+  the exact function — 7/7 passed: electricity/internet/water bills →
+  Utilities, insurance (no matching category in the app) → Other rather
+  than inventing one, Netflix/subscription → Subscription, an
+  unrecognized bill type → Other, mobile recharge → Utilities.
+- Reasoned through all 7 required scenarios (§19) against the actual
+  transaction/idempotency code path:
+  1. Electricity bill — pays via dialog, Document → paid, Expense
+     created, Reminder deleted.
+  2. Another utility bill (internet/water) — same path, independent of
+     bill 1.
+  3. Insurance/subscription-type bill — category maps correctly (Other /
+     Subscription per the app's real category list).
+  4. Already-paid bill — `paymentStatus === 'paid'` pre-check short-
+     circuits to `alreadyPaid: true`, no duplicate.
+  5. Duplicate/rapid double-click — handled by the transaction +
+     reminder-deletion-as-claim design above.
+  6. AI assistant after payment — context builder already queries live
+     MongoDB state; no separate verification needed beyond confirming
+     the queries are unconditional and unscoped by any cache.
+  7. Dashboard/reminder count after payment — dashboard stats query
+     `Reminder.find({ isCompleted: false })`; a deleted reminder simply
+     can't appear in any query result, so counts update on the next
+     fetch with no special-casing required.
+- `npm run build` (frontend): 0 errors, re-run clean after the
+  `DocumentCard` badge addition.
+- Backend: `node --check` clean on every modified/new file;
+  `node server.js` boots without import/runtime errors.
+
+### Remaining issues / honest caveats
+- **Not exercised against a live MongoDB Atlas transaction** in this
+  sandbox (no network access to the Atlas cluster from here) — the
+  transaction logic, retry-on-conflict behavior, and rollback-on-failure
+  path are implemented per MongoDB's documented `session.withTransaction`
+  semantics and reasoned through carefully, but a real end-to-end test
+  against your actual database (pay a bill, then hard-refresh and check
+  Mongo directly) is recommended before considering this fully verified
+  in production.
+- The confirmation dialog lets the user adjust the amount/date/category
+  before confirming (a deliberate small addition beyond the spec's literal
+  example, since it also solves "what if the bill amount isn't known yet"
+  and "what if a late fee changed the amount slightly" — the backend
+  still authoritatively falls back to the reminder's/document's own data
+  if any field is left blank).
+- Non-bill reminders (no amount, not document-sourced) keep the original
+  simple complete/reopen checkbox from before Part 8 — only reminders
+  that represent an actual bill get the new payment workflow, as intended.

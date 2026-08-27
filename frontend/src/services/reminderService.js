@@ -21,5 +21,9 @@ export const updateReminder = (id, data) =>
 export const deleteReminder = (id) =>
   api.delete(`/reminders/${id}`);
 
-export const reconcilePayments = () =>
-  api.post('/reminders/reconcile-payments');
+// Part 9 — the single, explicit action point for resolving a bill
+// reminder. payload: { amount, category, paymentMethod, date } — all
+// optional; the backend falls back to the reminder's/document's own
+// data for anything omitted.
+export const markReminderPaid = (id, payload = {}) =>
+  api.post(`/reminders/${id}/mark-paid`, payload);

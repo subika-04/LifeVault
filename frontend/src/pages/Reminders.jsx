@@ -1,8 +1,30 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Calendar, Plus, Trash2, Edit2, CheckSquare, Square, AlertCircle, Clock, RefreshCw } from 'lucide-react';
-import { getReminders, createReminder, updateReminder, deleteReminder, reconcilePayments, PRIORITIES } from '../services/reminderService';
+import { Calendar, Plus, Trash2, Edit2, CheckSquare, Square, AlertCircle, Clock, Receipt, CheckCircle2, IndianRupee } from 'lucide-react';
+import { getReminders, createReminder, updateReminder, deleteReminder, markReminderPaid, PRIORITIES } from '../services/reminderService';
+import { EXPENSE_CATEGORIES } from '../services/expenseService';
 import { useToast } from '../context/ToastContext';
 import EmptyState from '../components/EmptyState';
+
+// Mirrors billPaymentService.mapToExpenseCategory on the backend — only
+// used to pre-fill the confirmation dialog nicely; the backend re-derives
+// this itself if the category is left blank, so this never needs to be
+// authoritative.
+const CATEGORY_RULES = [
+  { category: 'Utilities', keywords: ['electric', 'power', 'current', 'water', 'gas', 'lpg', 'cylinder', 'internet', 'wifi', 'broadband', 'isp', 'phone', 'mobile', 'recharge', 'telecom', 'utility', 'utilities', 'dth', 'cable'] },
+  { category: 'Subscription', keywords: ['subscription', 'netflix', 'prime', 'hotstar', 'spotify', 'ott', 'membership'] },
+  { category: 'Healthcare', keywords: ['health', 'medical', 'hospital', 'pharmacy', 'clinic', 'doctor'] },
+  { category: 'Electronics', keywords: ['electronics', 'laptop', 'gadget', 'appliance', 'warranty'] },
+  { category: 'Transport', keywords: ['transport', 'travel', 'fuel', 'cab', 'taxi', 'flight', 'vehicle', 'car'] },
+  { category: 'Shopping', keywords: ['shopping', 'purchase', 'order', 'retail'] },
+  { category: 'Food', keywords: ['food', 'restaurant', 'grocery', 'grocer'] },
+];
+const guessCategory = (reminder) => {
+  const haystack = `${reminder.title || ''} ${reminder.description || ''}`.toLowerCase();
+  for (const rule of CATEGORY_RULES) {
+    if (rule.keywords.some((kw) => haystack.includes(kw))) return rule.category;
+  }
+  return 'Other';
+};
 
 const Reminders = () => {
   const { showToast } = useToast();
@@ -13,7 +35,11 @@ const Reminders = () => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingReminder, setEditingReminder] = useState(null);
-  const [reconciling, setReconciling] = useState(false);
+
+  // "I Have Paid This Bill" confirmation flow (Part 9)
+  const [payingReminder, setPayingReminder] = useState(null);
+  const [payForm, setPayForm] = useState({ amount: '', date: '', category: '' });
+  const [payConfirming, setPayConfirming] = useState(false);
 
   const [form, setForm] = useState({
     title: '',
@@ -42,31 +68,54 @@ const Reminders = () => {
     fetchReminders();
   }, [fetchReminders]);
 
-  // Part 8 — Payment -> Reminder sync: if an expense recorded elsewhere in
-  // the app auto-completed a reminder, refresh this list live instead of
-  // requiring a manual reload.
-  useEffect(() => {
-    const handler = () => fetchReminders();
-    window.addEventListener('lifevault:reminders-updated', handler);
-    return () => window.removeEventListener('lifevault:reminders-updated', handler);
-  }, [fetchReminders]);
+  // Opens the "I Have Paid This Bill" confirmation dialog. Does NOT touch
+  // the database — the dialog only shows what will happen; the actual
+  // sync only runs once the user explicitly confirms.
+  const handleOpenPayDialog = (reminder) => {
+    setPayingReminder(reminder);
+    setPayForm({
+      amount: reminder.amount != null ? reminder.amount : '',
+      date: new Date().toISOString().split('T')[0],
+      category: guessCategory(reminder),
+    });
+  };
 
-  // Retroactively re-checks pending reminders against existing expenses —
-  // covers a payment that was recorded before it could auto-match (e.g.
-  // before this feature existed, or before a matching fix shipped).
-  const handleReconcilePayments = async () => {
-    setReconciling(true);
+  const handleClosePayDialog = () => {
+    setPayingReminder(null);
+  };
+
+  // The single, explicit action point that resolves a bill reminder.
+  // Calls the backend transaction: mark the linked document paid,
+  // create the expense, delete the reminder — then refreshes local
+  // state and lets Dashboard know via the same cross-page event used
+  // elsewhere in the app.
+  const handleConfirmPayment = async () => {
+    if (!payingReminder) return;
+    if (!payForm.amount || Number(payForm.amount) <= 0) {
+      showToast('Please enter a valid bill amount', 'error');
+      return;
+    }
+
+    setPayConfirming(true);
     try {
-      const { data } = await reconcilePayments();
-      showToast(data.message);
-      if (data.data?.completedReminders?.length > 0) {
-        fetchReminders();
-        window.dispatchEvent(new CustomEvent('lifevault:reminders-updated'));
-      }
+      const { data } = await markReminderPaid(payingReminder._id, {
+        amount: Number(payForm.amount),
+        date: payForm.date,
+        category: payForm.category || undefined,
+      });
+
+      showToast(
+        data.data?.alreadyPaid
+          ? data.message
+          : 'Payment recorded — bill marked paid, expense added, reminder cleared.'
+      );
+      handleClosePayDialog();
+      fetchReminders();
+      window.dispatchEvent(new CustomEvent('lifevault:reminders-updated'));
     } catch (err) {
-      showToast(err.response?.data?.message || 'Failed to sync payments', 'error');
+      showToast(err.response?.data?.message || 'We couldn\'t record this payment. Your reminder is still active. Please try again.', 'error');
     } finally {
-      setReconciling(false);
+      setPayConfirming(false);
     }
   };
 
@@ -189,16 +238,6 @@ const Reminders = () => {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={handleReconcilePayments}
-            disabled={reconciling}
-            title="Re-check pending reminders against your existing expenses — useful if a payment didn't auto-match"
-          >
-            <RefreshCw size={18} className={reconciling ? 'spin' : ''} />
-            {reconciling ? 'Syncing...' : 'Sync Payments'}
-          </button>
           <button type="button" className="btn btn--primary" onClick={() => handleOpenModal()}>
             <Plus size={18} />
             Add Reminder
@@ -266,6 +305,7 @@ const Reminders = () => {
           {reminders.map((reminder) => {
             const status = getStatusDetails(reminder);
             const StatusIcon = status.icon;
+            const isBill = reminder.amount != null || reminder.source === 'document';
             return (
               <div
                 key={reminder._id}
@@ -280,15 +320,24 @@ const Reminders = () => {
                   flexDirection: 'row',
                 }}
               >
-                {/* Complete Checkbox */}
-                <button
-                  type="button"
-                  style={{ color: 'var(--color-primary-400)', display: 'flex', alignItems: 'center' }}
-                  onClick={() => handleToggleComplete(reminder)}
-                  title={reminder.isCompleted ? 'Mark Active' : 'Mark Completed'}
-                >
-                  {reminder.isCompleted ? <CheckSquare size={22} /> : <Square size={22} />}
-                </button>
+                {/* Complete Checkbox (non-bill reminders) / Bill indicator */}
+                {isBill ? (
+                  <span
+                    style={{ color: 'var(--color-success)', display: 'flex', alignItems: 'center' }}
+                    title="This reminder tracks a bill — resolve it with 'I Have Paid This Bill' below"
+                  >
+                    <IndianRupee size={20} />
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    style={{ color: 'var(--color-primary-400)', display: 'flex', alignItems: 'center' }}
+                    onClick={() => handleToggleComplete(reminder)}
+                    title={reminder.isCompleted ? 'Mark Active' : 'Mark Completed'}
+                  >
+                    {reminder.isCompleted ? <CheckSquare size={22} /> : <Square size={22} />}
+                  </button>
+                )}
 
                 {/* Content */}
                 <div style={{ flex: 1 }}>
@@ -321,15 +370,6 @@ const Reminders = () => {
                           Auto · Document
                         </span>
                       )}
-                      {reminder.isCompleted && reminder.completedByExpense && (
-                        <span
-                          className="badge badge--success"
-                          style={{ fontSize: '0.7rem', padding: '1px 6px' }}
-                          title="Automatically completed when a matching expense was recorded"
-                        >
-                          Auto · Paid
-                        </span>
-                      )}
                     </div>
                   </div>
                   {reminder.description && (
@@ -358,6 +398,16 @@ const Reminders = () => {
                   </div>
 
                   <div style={{ display: 'inline-flex', gap: '8px' }}>
+                    {isBill && !reminder.isCompleted && (
+                      <button
+                        type="button"
+                        className="btn btn--primary btn--sm"
+                        onClick={() => handleOpenPayDialog(reminder)}
+                      >
+                        <Receipt size={14} />
+                        I Have Paid This Bill
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="document-card__action"
@@ -379,6 +429,96 @@ const Reminders = () => {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* "I Have Paid This Bill" confirmation dialog (Part 9) */}
+      {payingReminder && (
+        <div className="modal-overlay" onClick={payConfirming ? undefined : handleClosePayDialog}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
+            <div className="modal__header">
+              <h2>Have you paid this bill?</h2>
+              <button type="button" className="modal__close" onClick={handleClosePayDialog} disabled={payConfirming}>
+                <Plus size={20} style={{ transform: 'rotate(45deg)' }} />
+              </button>
+            </div>
+
+            <div style={{ padding: '0 1.5rem 1.5rem' }}>
+              <div
+                style={{
+                  background: 'var(--color-bg-input)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '1rem',
+                  marginBottom: '1.25rem',
+                }}
+              >
+                <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: '1rem' }}>{payingReminder.title}</p>
+                <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
+                  Due {new Date(payingReminder.dueDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                </p>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="payAmount">Amount Paid (₹) *</label>
+                <input
+                  id="payAmount"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  className="form-input"
+                  value={payForm.amount}
+                  onChange={(e) => setPayForm((prev) => ({ ...prev, amount: e.target.value }))}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div className="form-group">
+                  <label htmlFor="payDate">Payment Date</label>
+                  <input
+                    id="payDate"
+                    type="date"
+                    className="form-input"
+                    value={payForm.date}
+                    onChange={(e) => setPayForm((prev) => ({ ...prev, date: e.target.value }))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="payCategory">Category</label>
+                  <select
+                    id="payCategory"
+                    className="form-input"
+                    value={payForm.category}
+                    onChange={(e) => setPayForm((prev) => ({ ...prev, category: e.target.value }))}
+                  >
+                    {EXPENSE_CATEGORIES.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <ul style={{ margin: '1rem 0 0', paddingLeft: '1.1rem', fontSize: '0.85rem', color: 'var(--color-text-muted)', lineHeight: 1.7 }}>
+                <li>The bill will be marked as <strong>PAID</strong></li>
+                <li>An expense will be created</li>
+                <li>This reminder will be removed</li>
+                <li>The AI assistant will reflect the updated status</li>
+              </ul>
+            </div>
+
+            <div className="modal__actions">
+              <button type="button" className="btn btn--ghost" onClick={handleClosePayDialog} disabled={payConfirming}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn--primary" onClick={handleConfirmPayment} disabled={payConfirming}>
+                <CheckCircle2 size={16} />
+                {payConfirming ? 'Recording...' : 'Yes, I Paid It'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -464,7 +604,7 @@ const Reminders = () => {
                   className="form-input"
                   value={form.amount}
                   onChange={handleChange}
-                  placeholder="e.g. 750 — lets LifeVault auto-match a future payment"
+                  placeholder="e.g. 750 — shown on the reminder and pre-fills the payment confirmation"
                 />
               </div>
 

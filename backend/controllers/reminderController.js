@@ -5,8 +5,9 @@ import {
   updateReminder,
   deleteReminder,
 } from '../services/reminderService.js';
-import { reconcilePendingReminders } from '../services/paymentSyncService.js';
+import { markBillAsPaid, BillPaymentError } from '../services/billPaymentService.js';
 import { PRIORITIES } from '../models/Reminder.js';
+import { EXPENSE_CATEGORIES, PAYMENT_METHODS } from '../models/Expense.js';
 
 export const listReminders = async (req, res, next) => {
   try {
@@ -128,36 +129,92 @@ export const deleteReminderHandler = async (req, res, next) => {
 };
 
 /**
- * POST /api/reminders/reconcile-payments
+ * POST /api/reminders/:id/mark-paid
  *
- * Re-checks every pending reminder for the authenticated user against
- * their existing expenses and completes any confident, unambiguous
- * match it finds — covering reminders whose corresponding expense was
- * recorded before payment-sync existed (or before a matching fix
- * shipped), without requiring the user to delete/re-add anything.
+ * The single, explicit user action point for resolving a bill reminder.
+ * Only ever runs after the user has confirmed "Yes, I Paid It" in the
+ * frontend dialog — nothing in the app calls this implicitly.
+ *
+ * body (all optional — the dialog pre-fills from the reminder/document,
+ * but the user may confirm/adjust before submitting):
+ *   { amount, category, paymentMethod, date }
+ *
+ * On success: the linked Document (if any) is marked paid, an Expense
+ * is created, and the Reminder is deleted outright.
+ * Idempotent: a repeat call (e.g. a double click) never creates a
+ * second expense — it either reports the already-paid state or, if the
+ * reminder was already deleted by the first call, responds gracefully
+ * rather than erroring.
  */
-export const reconcilePaymentsHandler = async (req, res, next) => {
+export const markBillPaidHandler = async (req, res, next) => {
   try {
-    const { completed, skippedNoAmount } = await reconcilePendingReminders(req.user._id);
+    const { amount, category, paymentMethod, date } = req.body;
 
-    let message;
-    if (completed.length > 0) {
-      message = `${completed.length} reminder${completed.length === 1 ? '' : 's'} matched to an existing payment and marked completed.`;
-    } else if (skippedNoAmount.length > 0) {
-      message = `No matches yet. ${skippedNoAmount.length} pending reminder${skippedNoAmount.length === 1 ? '' : 's'} — "${skippedNoAmount
-        .slice(0, 3)
-        .map((r) => r.title)
-        .join('", "')}"${skippedNoAmount.length > 3 ? ', ...' : ''} — ${skippedNoAmount.length === 1 ? 'has' : 'have'} no bill amount set, so ${skippedNoAmount.length === 1 ? "it can't" : "they can't"} be auto-matched yet. Edit ${skippedNoAmount.length === 1 ? 'it' : 'them'} to add a Bill Amount, then sync again.`;
-    } else {
-      message = 'No additional matches found — everything is already in sync.';
+    if (amount !== undefined && amount !== null && amount !== '' && Number(amount) <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount must be greater than zero',
+      });
+    }
+    if (category !== undefined && category !== null && category !== '' && !EXPENSE_CATEGORIES.includes(category)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid category value',
+      });
+    }
+    if (paymentMethod !== undefined && paymentMethod !== null && paymentMethod !== '' && !PAYMENT_METHODS.includes(paymentMethod)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payment method value',
+      });
+    }
+
+    const result = await markBillAsPaid(req.user._id, req.params.id, {
+      amount,
+      category,
+      paymentMethod,
+      date,
+    });
+
+    if (result.alreadyPaid) {
+      return res.status(200).json({
+        success: true,
+        message: 'This bill was already marked as paid — no duplicate payment was recorded.',
+        data: {
+          alreadyPaid: true,
+          expense: result.expense || null,
+          document: result.document || null,
+        },
+      });
     }
 
     res.status(200).json({
       success: true,
-      message,
-      data: { completedReminders: completed, skippedNoAmount },
+      message: 'Payment recorded successfully.',
+      data: {
+        alreadyPaid: false,
+        expense: result.expense,
+        document: result.document,
+      },
     });
   } catch (error) {
+    if (error instanceof BillPaymentError) {
+      // A 404 here specifically means "the reminder is already gone" —
+      // most likely a near-simultaneous double click. Treat it the same
+      // as an already-paid response rather than a scary error: no
+      // duplicate was created either way, which is what matters.
+      if (error.statusCode === 404) {
+        return res.status(200).json({
+          success: true,
+          message: 'This bill was already marked as paid — no duplicate payment was recorded.',
+          data: { alreadyPaid: true, expense: null, document: null },
+        });
+      }
+      return res.status(error.statusCode || 400).json({
+        success: false,
+        message: error.message,
+      });
+    }
     next(error);
   }
 };

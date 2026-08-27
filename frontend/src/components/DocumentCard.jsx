@@ -109,6 +109,17 @@ const DocumentCard = ({ document, onEdit, onDelete, onAnalyze, analyzing }) => {
                 {ai.amount != null && (
                   <li><strong>Amount:</strong> {ai.currency} {ai.amount}</li>
                 )}
+                {ai.dueDate && (
+                  <li>
+                    <strong>Payment status:</strong>{' '}
+                    <span
+                      className={`badge ${document.paymentStatus === 'paid' ? 'badge--success' : 'badge--warning'}`}
+                      style={{ fontSize: '0.7rem', padding: '1px 6px' }}
+                    >
+                      {document.paymentStatus === 'paid' ? 'Paid' : 'Due'}
+                    </span>
+                  </li>
+                )}
                 {ai.warrantyExpiryDate && (
                   <li><strong>Warranty until:</strong> {formatDate(ai.warrantyExpiryDate)}</li>
                 )}

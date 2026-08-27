@@ -55,6 +55,10 @@ export const buildUserContext = async (userId) => {
           ? `warrantyExpiry=${new Date(ai.warrantyExpiryDate).toISOString().slice(0, 10)}`
           : null,
         ai.serialNumber ? `serialNumber=${ai.serialNumber}` : null,
+        // Only meaningful for bill-type documents (ones with a due
+        // date) — see Document.paymentStatus, set exclusively by the
+        // explicit "I Have Paid This Bill" confirmation flow.
+        ai.dueDate ? `paymentStatus=${doc.paymentStatus === 'paid' ? 'Paid' : 'Due'}` : null,
         doc.tags?.length ? `tags=[${doc.tags.join(', ')}]` : null,
         ai.summary ? `summary="${ai.summary}"` : null,
       ].filter(Boolean);
@@ -91,6 +95,7 @@ export const buildUserContext = async (userId) => {
         `amount=${exp.amount} INR`,
         `date=${new Date(exp.date).toISOString().slice(0, 10)}`,
         `paymentMethod=${exp.paymentMethod || 'Card'}`,
+        exp.sourceType === 'BILL_PAYMENT' ? 'source=Bill Payment' : null,
       ].filter(Boolean);
       return `- Expense: ${fields.join(', ')}`;
     });

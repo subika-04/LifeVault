@@ -113,8 +113,9 @@ const buildReminderPlan = (document) => {
       description: aiData.summary || `Auto-generated from ${document.fileName || document.title}.`,
       dueDate: aiData.dueDate,
       priority: 'High',
-      // Carries the bill amount through so payment-sync can later match
-      // a recorded Expense back to this reminder (see paymentSyncService).
+      // Carries the bill amount through so it displays on the reminder
+      // and pre-fills the "I Have Paid This Bill" confirmation dialog
+      // (see billPaymentService.markBillAsPaid).
       amount: aiData.amount != null ? aiData.amount : null,
     };
   }

@@ -67,6 +67,22 @@ const documentSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // ---- Bill payment workflow (Part 9) ----
+    // Only meaningful for bill-type documents (ones with aiData.dueDate,
+    // which is what generates a reminder in the first place) — irrelevant
+    // documents (IDs, certificates, etc.) simply stay 'due' forever,
+    // unused. Set to 'paid' exclusively by the explicit
+    // "I Have Paid This Bill" confirmation flow — see
+    // billPaymentService.markBillAsPaid. Never set implicitly.
+    paymentStatus: {
+      type: String,
+      enum: ['due', 'paid'],
+      default: 'due',
+    },
+    paidAt: {
+      type: Date,
+      default: null,
+    },
     cloudinaryPublicId: {
       type: String,
       default: null,
