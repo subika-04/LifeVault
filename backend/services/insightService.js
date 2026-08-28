@@ -399,7 +399,7 @@ export const getDashboardStats = async (userId) => {
   let upcomingCount = 0;
   const needsAttention = [];
 
-  const checkExpiry = (date, title, type, id) => {
+  const checkExpiry = (date, title, type, id, extra = {}) => {
     if (!date) return;
     const expiryDate = new Date(date);
     const diffTime = expiryDate - now;
@@ -414,6 +414,10 @@ export const getDashboardStats = async (userId) => {
         dueDate: expiryDate,
         daysLeft: diffDays,
         priority: diffDays < 0 ? 'Overdue' : diffDays <= 7 ? 'Urgent' : 'Upcoming',
+        sourceType: extra.sourceType || null,
+        isBill: Boolean(extra.isBill),
+        isRenewable: Boolean(extra.isRenewable),
+        amount: extra.amount ?? null,
       };
       needsAttention.push(item);
 
@@ -435,21 +439,43 @@ export const getDashboardStats = async (userId) => {
   // payment status).
   documents.forEach((doc) => {
     if (doc.paymentStatus !== 'paid') {
-      checkExpiry(doc.expiryDate, doc.title, 'Document Expiry', doc._id);
+      // A document with an AI-extracted due date is a payable bill (the
+      // Dashboard offers "I Have Paid This Bill"); one without is a
+      // plain expiring document — an ID card, license, policy scan,
+      // etc. — that needs a fresh copy uploaded instead (the Dashboard
+      // offers "Renew").
+      const isBill = Boolean(doc.aiData?.dueDate);
+      checkExpiry(doc.expiryDate, doc.title, 'Document Expiry', doc._id, {
+        sourceType: 'document',
+        isBill,
+        isRenewable: !isBill,
+        amount: doc.aiData?.amount ?? null,
+      });
     }
     if (doc.aiData?.warrantyExpiryDate) {
-      checkExpiry(doc.aiData.warrantyExpiryDate, `${doc.title} (Warranty)`, 'Warranty Expiry', doc._id);
+      checkExpiry(doc.aiData.warrantyExpiryDate, `${doc.title} (Warranty)`, 'Warranty Expiry', doc._id, {
+        sourceType: 'document',
+        isRenewable: true,
+      });
     }
   });
 
   // 2. Process assets with warranties
   assets.forEach((asset) => {
-    checkExpiry(asset.warrantyExpiry, `${asset.name} (Warranty)`, 'Warranty Expiry', asset._id);
+    checkExpiry(asset.warrantyExpiry, `${asset.name} (Warranty)`, 'Warranty Expiry', asset._id, {
+      sourceType: 'asset',
+    });
   });
 
-  // 3. Process reminders
+  // 3. Process reminders. A reminder with a known amount is itself a
+  // bill (see Reminder.amount, Part 8/9) — offer the same "I Have Paid
+  // This Bill" action here as on the Reminders page.
   reminders.forEach((rem) => {
-    checkExpiry(rem.dueDate, rem.title, 'Reminder Due', rem._id);
+    checkExpiry(rem.dueDate, rem.title, 'Reminder Due', rem._id, {
+      sourceType: 'reminder',
+      isBill: rem.amount != null,
+      amount: rem.amount ?? null,
+    });
   });
 
   // Sort needsAttention by daysLeft ascending (most urgent/overdue first)

@@ -83,6 +83,22 @@ const documentSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // ---- Document renewal (Part 9.3) ----
+    // When a document is expiring/expired, the "Renew" action uploads a
+    // fresh replacement document rather than editing the old one in
+    // place — preserving the old document as history. `renewedFrom`
+    // (on the NEW document) and `supersededBy` (on the OLD document)
+    // are the two ends of that link; only one is ever set per document.
+    renewedFrom: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Document',
+      default: null,
+    },
+    supersededBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Document',
+      default: null,
+    },
     cloudinaryPublicId: {
       type: String,
       default: null,

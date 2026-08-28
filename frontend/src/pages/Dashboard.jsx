@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { FileText, TrendingUp, AlertTriangle, Sparkles, RefreshCw, Wallet, Clock, ArrowRight } from 'lucide-react';
+import { FileText, TrendingUp, AlertTriangle, Sparkles, RefreshCw, Wallet, Clock, ArrowRight, IndianRupee, RotateCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import {
   BarChart,
@@ -13,6 +13,10 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { getDashboardStats, getInsights } from '../services/aiService';
+import { markReminderPaid } from '../services/reminderService';
+import { createDocument, markDocumentPaid } from '../services/documentService';
+import PayBillDialog from '../components/PayBillDialog';
+import UploadDocumentModal from '../components/UploadDocumentModal';
 
 const CATEGORY_LABELS = {
   identity: 'Identity',
@@ -46,6 +50,15 @@ const Dashboard = () => {
 
   const [insights, setInsights] = useState(null);
   const [insightsLoading, setInsightsLoading] = useState(true);
+
+  // "I Have Paid This Bill" from the Needs Your Attention card — works
+  // for both reminder-sourced and document-sourced bill alerts.
+  const [payingItem, setPayingItem] = useState(null);
+  const [payConfirming, setPayConfirming] = useState(false);
+
+  // "Renew" a plain expiring document (not a bill) from the same card.
+  const [renewingItem, setRenewingItem] = useState(null);
+  const [renewSubmitting, setRenewSubmitting] = useState(false);
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
@@ -93,6 +106,62 @@ const Dashboard = () => {
     if (priority === 'Overdue') return 'badge--danger';
     if (priority === 'Urgent') return 'badge--warning';
     return 'badge--primary';
+  };
+
+  const handleOpenPay = (item) => setPayingItem(item);
+  const handleClosePay = () => setPayingItem(null);
+
+  const handleConfirmPay = async (payload) => {
+    if (!payingItem) return;
+    setPayConfirming(true);
+    try {
+      const { data } =
+        payingItem.sourceType === 'reminder'
+          ? await markReminderPaid(payingItem.id, payload)
+          : await markDocumentPaid(payingItem.id, payload);
+
+      showToast(
+        data.data?.alreadyPaid
+          ? data.message
+          : 'Payment recorded — bill marked paid, expense added, reminder cleared.'
+      );
+      setPayingItem(null);
+      loadStats();
+      window.dispatchEvent(new CustomEvent('lifevault:reminders-updated'));
+    } catch (err) {
+      showToast(
+        err.response?.data?.message ||
+          "We couldn't record this payment. Nothing was changed. Please try again.",
+        'error'
+      );
+    } finally {
+      setPayConfirming(false);
+    }
+  };
+
+  const handleOpenRenew = (item) => setRenewingItem(item);
+  const handleCloseRenew = () => setRenewingItem(null);
+
+  const handleRenewSubmit = async (formData) => {
+    setRenewSubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append('title', formData.title);
+      fd.append('category', formData.category);
+      fd.append('description', formData.description || '');
+      if (formData.expiryDate) fd.append('expiryDate', formData.expiryDate);
+      if (formData.tags) fd.append('tags', formData.tags);
+      fd.append('renewsDocumentId', formData.renewsDocumentId);
+      fd.append('file', formData.file);
+      await createDocument(fd);
+      showToast('Renewal uploaded — old document archived');
+      setRenewingItem(null);
+      loadStats();
+    } catch (err) {
+      showToast(err.response?.data?.message || 'Failed to upload renewal', 'error');
+    } finally {
+      setRenewSubmitting(false);
+    }
   };
 
   return (
@@ -201,8 +270,10 @@ const Dashboard = () => {
                   key={idx}
                   style={{
                     display: 'flex',
+                    flexWrap: 'wrap',
                     justifyContent: 'space-between',
                     alignItems: 'center',
+                    gap: '8px',
                     padding: '10px 12px',
                     background: 'rgba(255, 255, 255, 0.02)',
                     borderRadius: '8px',
@@ -221,7 +292,7 @@ const Dashboard = () => {
                       {item.type}
                     </span>
                   </div>
-                  <div style={{ textAlign: 'right' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span className={`badge ${getAttentionBadgeClass(item.priority)}`} style={{ fontSize: '0.7rem' }}>
                       {item.priority === 'Overdue'
                         ? 'Overdue'
@@ -231,6 +302,26 @@ const Dashboard = () => {
                         ? 'Due tomorrow'
                         : `Expires in ${item.daysLeft} days`}
                     </span>
+                    {item.isBill && (
+                      <button
+                        type="button"
+                        className="btn btn--primary btn--sm"
+                        onClick={() => handleOpenPay(item)}
+                      >
+                        <IndianRupee size={13} />
+                        I Have Paid This Bill
+                      </button>
+                    )}
+                    {item.isRenewable && (
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => handleOpenRenew(item)}
+                      >
+                        <RotateCw size={13} />
+                        Renew
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -270,6 +361,32 @@ const Dashboard = () => {
           )}
         </div>
       </div>
+
+      {/* "I Have Paid This Bill" — from a Needs Your Attention bill alert */}
+      <PayBillDialog
+        bill={
+          payingItem
+            ? { title: payingItem.title, dueDate: payingItem.dueDate, amount: payingItem.amount }
+            : null
+        }
+        confirming={payConfirming}
+        onConfirm={handleConfirmPay}
+        onClose={payConfirming ? undefined : handleClosePay}
+      />
+
+      {/* "Renew" — upload a fresh copy of an expiring (non-bill) document */}
+      <UploadDocumentModal
+        isOpen={Boolean(renewingItem)}
+        onClose={renewSubmitting ? undefined : handleCloseRenew}
+        onSubmit={handleRenewSubmit}
+        document={null}
+        renewsDocument={
+          renewingItem
+            ? { _id: renewingItem.id, title: renewingItem.title.replace(/ \(Warranty\)$/, '') }
+            : null
+        }
+        loading={renewSubmitting}
+      />
     </div>
   );
 };

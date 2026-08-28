@@ -76,7 +76,10 @@ const findExistingPaymentExpense = (userId, documentId) =>
 
 /**
  * Core payment recording logic, run once inside (or, in the fallback
- * path, without) a transaction session.
+ * path, without) a transaction session. `reminder` may be null — a bill
+ * can be paid directly from its Document (e.g. via the Dashboard's
+ * "Needs Your Attention" card) even when no active Reminder exists for
+ * it, so this never assumes one is present.
  */
 const performPayment = async (userId, reminder, document, overrides, session) => {
   const opts = session ? { session } : {};
@@ -84,7 +87,7 @@ const performPayment = async (userId, reminder, document, overrides, session) =>
   const effectiveAmount =
     overrides.amount != null && Number(overrides.amount) > 0
       ? Number(overrides.amount)
-      : reminder.amount ?? document?.aiData?.amount ?? null;
+      : reminder?.amount ?? document?.aiData?.amount ?? null;
 
   if (effectiveAmount == null) {
     throw new BillPaymentError('Please enter the bill amount to record this payment.', 400);
@@ -93,7 +96,7 @@ const performPayment = async (userId, reminder, document, overrides, session) =>
   const category =
     overrides.category && EXPENSE_CATEGORIES.includes(overrides.category)
       ? overrides.category
-      : mapToExpenseCategory(document?.aiData?.documentType, reminder.title, reminder.description);
+      : mapToExpenseCategory(document?.aiData?.documentType, reminder?.title, reminder?.description, document?.title);
 
   const paymentMethod =
     overrides.paymentMethod && PAYMENT_METHODS.includes(overrides.paymentMethod)
@@ -105,18 +108,20 @@ const performPayment = async (userId, reminder, document, overrides, session) =>
     throw new BillPaymentError('Invalid payment date.', 400);
   }
 
+  const description = reminder?.title || document?.title || 'Bill Payment';
+
   const [expense] = await Expense.create(
     [
       {
         user: userId,
         amount: effectiveAmount,
         category,
-        description: reminder.title,
+        description,
         date: paymentDate,
         paymentMethod,
         sourceType: 'BILL_PAYMENT',
         sourceDocumentId: document ? document._id : null,
-        linkedReminder: reminder._id,
+        linkedReminder: reminder ? reminder._id : null,
       },
     ],
     opts
@@ -128,7 +133,9 @@ const performPayment = async (userId, reminder, document, overrides, session) =>
     await document.save(opts);
   }
 
-  await Reminder.deleteOne({ _id: reminder._id, user: userId }, opts);
+  if (reminder) {
+    await Reminder.deleteOne({ _id: reminder._id, user: userId }, opts);
+  }
 
   return { expense, document: document || null };
 };
@@ -210,6 +217,79 @@ export const markBillAsPaid = async (userId, reminderId, overrides = {}) => {
       throw new BillPaymentError('This reminder no longer exists — it may already be marked as paid.', 404);
     }
     const fallbackResult = await performPayment(userId, fallbackReminder, document, overrides, null);
+    return { alreadyPaid: false, ...fallbackResult };
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
+ * Mark a bill as paid starting from its Document rather than its
+ * Reminder — used by the Dashboard's "Needs Your Attention" card, whose
+ * document-expiry-based alerts reference the Document directly and may
+ * or may not have an active Reminder alongside them (a reminder might
+ * never have been auto-created, might already have been deleted for
+ * other reasons, or the alert might exist purely because of the
+ * document's own expiry date). Any linked pending Reminder found is
+ * still cleaned up as part of the same transaction, exactly as in
+ * `markBillAsPaid`. Same idempotency guarantees, same shape of result.
+ */
+export const markDocumentBillAsPaid = async (userId, documentId, overrides = {}) => {
+  const document = await Document.findOne({ _id: documentId, user: userId });
+  if (!document) {
+    throw new BillPaymentError('This document no longer exists.', 404);
+  }
+  if (!document.aiData?.dueDate) {
+    throw new BillPaymentError('This document has no due date on file, so there is nothing to mark as paid.', 400);
+  }
+  if (document.paymentStatus === 'paid') {
+    const existingExpense = await findExistingPaymentExpense(userId, document._id);
+    return { alreadyPaid: true, expense: existingExpense, document };
+  }
+
+  const session = await mongoose.startSession();
+  try {
+    let result;
+    await session.withTransaction(async () => {
+      const lockedDocument = await Document.findOne({ _id: documentId, user: userId }).session(session);
+      if (!lockedDocument) {
+        throw new BillPaymentError('This document no longer exists.', 404);
+      }
+      if (lockedDocument.paymentStatus === 'paid') {
+        throw new BillPaymentError('ALREADY_PAID', 200);
+      }
+
+      const lockedReminder = await Reminder.findOne({
+        document: documentId,
+        user: userId,
+        isCompleted: false,
+      }).session(session);
+
+      result = await performPayment(userId, lockedReminder, lockedDocument, overrides, session);
+    });
+    return { alreadyPaid: false, ...result };
+  } catch (err) {
+    if (err instanceof BillPaymentError && err.message === 'ALREADY_PAID') {
+      const existingExpense = await findExistingPaymentExpense(userId, document._id);
+      return { alreadyPaid: true, expense: existingExpense, document };
+    }
+
+    const message = String(err?.message || '');
+    const transactionsUnsupported =
+      err?.code === 20 || message.includes('Transaction numbers') || message.includes('replica set');
+
+    if (!transactionsUnsupported) throw err;
+
+    const fallbackDocument = await Document.findOne({ _id: documentId, user: userId });
+    if (!fallbackDocument) {
+      throw new BillPaymentError('This document no longer exists.', 404);
+    }
+    if (fallbackDocument.paymentStatus === 'paid') {
+      const existingExpense = await findExistingPaymentExpense(userId, fallbackDocument._id);
+      return { alreadyPaid: true, expense: existingExpense, document: fallbackDocument };
+    }
+    const fallbackReminder = await Reminder.findOne({ document: documentId, user: userId, isCompleted: false });
+    const fallbackResult = await performPayment(userId, fallbackReminder, fallbackDocument, overrides, null);
     return { alreadyPaid: false, ...fallbackResult };
   } finally {
     session.endSession();

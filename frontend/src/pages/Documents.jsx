@@ -76,9 +76,10 @@ const Documents = () => {
         fd.append('description', formData.description || '');
         if (formData.expiryDate) fd.append('expiryDate', formData.expiryDate);
         if (formData.tags) fd.append('tags', formData.tags);
+        if (formData.renewsDocumentId) fd.append('renewsDocumentId', formData.renewsDocumentId);
         fd.append('file', formData.file);
         await createDocument(fd);
-        showToast('Document uploaded successfully');
+        showToast(formData.renewsDocumentId ? 'Renewal uploaded — old document archived' : 'Document uploaded successfully');
       }
       setModalOpen(false);
       setEditingDoc(null);

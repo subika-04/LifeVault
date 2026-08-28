@@ -45,6 +45,12 @@ export const deleteDocument = (id) =>
 export const analyzeDocument = (id) =>
   api.post(`/documents/${id}/analyze`);
 
+// Part 9.3 — the same "I Have Paid This Bill" workflow as the
+// Reminder-based one, entered from the Document side (used by the
+// Dashboard's Needs Your Attention card).
+export const markDocumentPaid = (id, payload = {}) =>
+  api.post(`/documents/${id}/mark-paid`, payload);
+
 export const getVaultSummary = () =>
   api.get('/vault/summary');
 

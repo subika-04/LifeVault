@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { X, Upload, FileText } from 'lucide-react';
+import { X, Upload, FileText, RefreshCw } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../services/documentService';
 
-const UploadDocumentModal = ({ isOpen, onClose, onSubmit, document, loading }) => {
+const UploadDocumentModal = ({ isOpen, onClose, onSubmit, document, renewsDocument, loading }) => {
   const isEdit = Boolean(document);
+  const isRenewal = Boolean(renewsDocument);
 
   const [form, setForm] = useState({
     title: '',
@@ -26,6 +27,15 @@ const UploadDocumentModal = ({ isOpen, onClose, onSubmit, document, loading }) =
         tags: document.tags?.join(', ') || '',
       });
       setFile(null);
+    } else if (renewsDocument) {
+      setForm({
+        title: renewsDocument.title || '',
+        category: renewsDocument.category || 'identity',
+        description: '',
+        expiryDate: '',
+        tags: '',
+      });
+      setFile(null);
     } else {
       setForm({
         title: '',
@@ -36,7 +46,7 @@ const UploadDocumentModal = ({ isOpen, onClose, onSubmit, document, loading }) =
       });
       setFile(null);
     }
-  }, [document, isOpen]);
+  }, [document, renewsDocument, isOpen]);
 
   if (!isOpen) return null;
 
@@ -51,20 +61,43 @@ const UploadDocumentModal = ({ isOpen, onClose, onSubmit, document, loading }) =
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    onSubmit({ ...form, file }, isEdit);
+    onSubmit({ ...form, file, renewsDocumentId: renewsDocument?._id }, isEdit);
   };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal__header">
-          <h2>{isEdit ? 'Edit Document' : 'Upload Document'}</h2>
+          <h2>{isEdit ? 'Edit Document' : isRenewal ? 'Renew Document' : 'Upload Document'}</h2>
           <button type="button" className="modal__close" onClick={onClose}>
             <X size={20} />
           </button>
         </div>
 
         <form className="modal__form" onSubmit={handleSubmit}>
+          {isRenewal && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '10px',
+                background: 'rgba(99, 102, 241, 0.1)',
+                border: '1px solid rgba(99, 102, 241, 0.3)',
+                borderRadius: 'var(--radius-md)',
+                padding: '0.85rem 1rem',
+                marginBottom: '1.25rem',
+                fontSize: '0.85rem',
+                color: 'var(--color-text-muted)',
+              }}
+            >
+              <RefreshCw size={16} style={{ flexShrink: 0, marginTop: '2px', color: 'var(--color-primary-300)' }} />
+              <span>
+                Uploading a renewal for <strong style={{ color: 'var(--color-text)' }}>{renewsDocument.title}</strong>.
+                The old document will be archived and linked to this one once you upload.
+              </span>
+            </div>
+          )}
+
           <div className="form-group">
             <label htmlFor="title">Title *</label>
             <input
@@ -169,7 +202,7 @@ const UploadDocumentModal = ({ isOpen, onClose, onSubmit, document, loading }) =
               Cancel
             </button>
             <button type="submit" className="btn btn--primary" disabled={loading}>
-              {loading ? 'Saving...' : isEdit ? 'Save Changes' : 'Upload'}
+              {loading ? 'Saving...' : isEdit ? 'Save Changes' : isRenewal ? 'Upload Renewal' : 'Upload'}
             </button>
           </div>
         </form>

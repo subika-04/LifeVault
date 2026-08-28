@@ -90,6 +90,7 @@ export const createDocument = async (userId, data, file) => {
     mimeType: file.mimetype,
     expiryDate: data.expiryDate || null,
     tags: data.tags || [],
+    renewedFrom: data.renewedFrom || null,
   });
 
   return document;

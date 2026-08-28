@@ -118,7 +118,7 @@ PAYMENT WORKFLOW ✅ (Part 9 — Explicit "I Have Paid This Bill" confirmation f
 ---
 
 ## Latest Checkpoint
-`LifeVault_PART9_2_VOICE_ASSISTANT_AND_EXPIRY_FIX.zip`
+`LifeVault_PART9_3_DASHBOARD_BILL_AND_RENEWAL_ACTIONS.zip`
 
 ## Post-Completion Enhancements
 
@@ -672,3 +672,106 @@ browser-API-driven (`SpeechRecognition`/`speechSynthesis`) and can't be
 exercised headlessly in this sandbox — it should be manually verified in
 Chrome/Edge (mic prompt, live transcription, auto-submit, spoken replies,
 per-message replay) after deploying.
+
+## Post-Completion Enhancement — Dashboard Bill/Renewal Actions (Part 9.3)
+
+Requested: (1) confirm manually-set expiry dates still surface correctly
+(covered by Part 9.1's fix — verified that fix only suppresses alerts for
+documents whose `paymentStatus === 'paid'`, which is never true for a
+plain document with a user-set `expiryDate` and no AI-extracted due
+date), and (2) add both a "Renew Document" action and an "I Have Paid
+This Bill" action directly on the Dashboard's Needs Your Attention card,
+rather than requiring a trip to the Reminders/Documents pages.
+
+### Backend
+
+- **`insightService.getDashboardStats`** — every `needsAttention` item now
+  carries `sourceType` (`'document' | 'asset' | 'reminder'`), `isBill`,
+  `isRenewable`, and `amount`, so the frontend knows exactly which
+  action button (if any) to render, without re-deriving that logic
+  client-side:
+  - Document-expiry item, AI-extracted due date present → `isBill: true`
+    (it's a payable bill).
+  - Document-expiry item, no due date (passport, license, insurance
+    scan, etc.) → `isRenewable: true` (it's a document that needs a
+    fresh copy uploaded, not a payment).
+  - Warranty-expiry item → always `isRenewable: true`, never a bill.
+  - Reminder-due item → `isBill: true` only when the reminder has a
+    known `amount` (Part 8/9's existing bill-reminder signal); a plain
+    to-do reminder gets neither button.
+- **`billPaymentService.markDocumentBillAsPaid`** (new) — the same
+  transactional pay-a-bill logic as `markBillAsPaid`, entered from the
+  Document side instead of the Reminder side. Needed because a
+  Document-Expiry alert may not have (or may no longer have) an active
+  Reminder attached — the Dashboard only ever has the document's id for
+  these alerts. It opportunistically finds and cleans up any linked
+  pending Reminder inside the same transaction if one does exist, and
+  shares the exact same idempotency guarantees (`paymentStatus==='paid'`
+  pre-check, transactional re-check, friendly "already paid" on a
+  near-simultaneous double click).
+- **`POST /api/documents/:id/mark-paid`** (new route/controller,
+  `markDocumentPaidHandler`) — mirrors `reminderController.
+  markBillPaidHandler`'s validation and response shape exactly for
+  frontend consistency.
+- **Document renewal:** `Document` model gained `renewedFrom` (on the new
+  document) and `supersededBy` (on the old one) — a bidirectional audit
+  trail. `POST /api/documents` now accepts an optional
+  `renewsDocumentId`: after verifying the old document belongs to the
+  requesting user, the new upload proceeds normally and the old document
+  is archived (`isArchived: true`) and linked (`supersededBy`) in the
+  same request. Archived documents already drop out of every existing
+  document listing/expiry query (`isArchived: false` filters were
+  already in place everywhere), so the old document disappears from
+  Needs Your Attention, the Documents page, and Vault automatically —
+  no new filtering logic needed.
+
+### Frontend
+
+- **`components/PayBillDialog.jsx`** (new) — the "I Have Paid This Bill"
+  confirmation dialog, extracted from `Reminders.jsx` into a shared,
+  purely presentational component (`bill` in, confirmed `{amount, date,
+  category}` out via `onConfirm`) so both the Reminders page and the
+  Dashboard use identical UI/logic. `Reminders.jsx` was refactored to
+  use it — behavior unchanged, verified with a clean rebuild.
+- **`components/UploadDocumentModal.jsx`** — gained a `renewsDocument`
+  prop: when set, the modal opens in "Renew Document" mode — title shows
+  "Renew Document", an info banner explains the old document will be
+  archived and linked, the title/category are pre-filled from the old
+  document, and the submitted payload carries `renewsDocumentId` through
+  automatically. Normal upload/edit behavior is unchanged when this prop
+  is omitted.
+- **`Dashboard.jsx`** — each Needs Your Attention item now renders an
+  "I Have Paid This Bill" button (`isBill`) and/or a "Renew" button
+  (`isRenewable`) inline. Pay routes to `markReminderPaid` or
+  `markDocumentPaid` depending on the item's `sourceType` — the two
+  backend entry points share the exact same transactional core, so the
+  result is identical either way. Renew opens `UploadDocumentModal` in
+  renewal mode. Both actions refresh dashboard stats
+  (`loadStats()`) on success; paying also dispatches the existing
+  `lifevault:reminders-updated` event so the Reminders page (if open in
+  another tab) refreshes too.
+
+### Tests performed
+
+- Re-verified Part 9.1's fix only suppresses `Document Expiry` alerts
+  for `paymentStatus === 'paid'` documents — a plain document with a
+  user-set `expiryDate` and no AI due date is never in that state, so it
+  correctly continues to appear.
+- Standalone harness mirroring the new `isBill`/`isRenewable`
+  classification logic: 6/6 scenarios passed — unpaid bill document →
+  Pay only, non-bill expiring document → Renew only, warranty expiry →
+  Renew only, bill-type reminder → Pay only, plain to-do reminder →
+  neither button.
+- `npm run build`: 0 errors. Backend: `node --check` clean on every
+  modified/new file; `node server.js` boots without import/runtime
+  errors.
+
+### Remaining honest caveat
+
+As with Part 9's original transactional payment flow, the new
+document-first payment path and the renewal archive/link flow use the
+same MongoDB transaction and sequential-fallback patterns but haven't
+been exercised against a live Atlas connection in this sandbox — a real
+end-to-end check (pay a bill via the Dashboard button, renew a document
+via the Dashboard button, confirm both in MongoDB directly) is
+recommended after deploying.

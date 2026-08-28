@@ -1,30 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Calendar, Plus, Trash2, Edit2, CheckSquare, Square, AlertCircle, Clock, Receipt, CheckCircle2, IndianRupee } from 'lucide-react';
+import { Calendar, Plus, Trash2, Edit2, CheckSquare, Square, AlertCircle, Clock, Receipt, IndianRupee } from 'lucide-react';
 import { getReminders, createReminder, updateReminder, deleteReminder, markReminderPaid, PRIORITIES } from '../services/reminderService';
-import { EXPENSE_CATEGORIES } from '../services/expenseService';
 import { useToast } from '../context/ToastContext';
 import EmptyState from '../components/EmptyState';
-
-// Mirrors billPaymentService.mapToExpenseCategory on the backend — only
-// used to pre-fill the confirmation dialog nicely; the backend re-derives
-// this itself if the category is left blank, so this never needs to be
-// authoritative.
-const CATEGORY_RULES = [
-  { category: 'Utilities', keywords: ['electric', 'power', 'current', 'water', 'gas', 'lpg', 'cylinder', 'internet', 'wifi', 'broadband', 'isp', 'phone', 'mobile', 'recharge', 'telecom', 'utility', 'utilities', 'dth', 'cable'] },
-  { category: 'Subscription', keywords: ['subscription', 'netflix', 'prime', 'hotstar', 'spotify', 'ott', 'membership'] },
-  { category: 'Healthcare', keywords: ['health', 'medical', 'hospital', 'pharmacy', 'clinic', 'doctor'] },
-  { category: 'Electronics', keywords: ['electronics', 'laptop', 'gadget', 'appliance', 'warranty'] },
-  { category: 'Transport', keywords: ['transport', 'travel', 'fuel', 'cab', 'taxi', 'flight', 'vehicle', 'car'] },
-  { category: 'Shopping', keywords: ['shopping', 'purchase', 'order', 'retail'] },
-  { category: 'Food', keywords: ['food', 'restaurant', 'grocery', 'grocer'] },
-];
-const guessCategory = (reminder) => {
-  const haystack = `${reminder.title || ''} ${reminder.description || ''}`.toLowerCase();
-  for (const rule of CATEGORY_RULES) {
-    if (rule.keywords.some((kw) => haystack.includes(kw))) return rule.category;
-  }
-  return 'Other';
-};
+import PayBillDialog from '../components/PayBillDialog';
 
 const Reminders = () => {
   const { showToast } = useToast();
@@ -38,7 +17,6 @@ const Reminders = () => {
 
   // "I Have Paid This Bill" confirmation flow (Part 9)
   const [payingReminder, setPayingReminder] = useState(null);
-  const [payForm, setPayForm] = useState({ amount: '', date: '', category: '' });
   const [payConfirming, setPayConfirming] = useState(false);
 
   const [form, setForm] = useState({
@@ -73,11 +51,6 @@ const Reminders = () => {
   // sync only runs once the user explicitly confirms.
   const handleOpenPayDialog = (reminder) => {
     setPayingReminder(reminder);
-    setPayForm({
-      amount: reminder.amount != null ? reminder.amount : '',
-      date: new Date().toISOString().split('T')[0],
-      category: guessCategory(reminder),
-    });
   };
 
   const handleClosePayDialog = () => {
@@ -89,20 +62,12 @@ const Reminders = () => {
   // create the expense, delete the reminder — then refreshes local
   // state and lets Dashboard know via the same cross-page event used
   // elsewhere in the app.
-  const handleConfirmPayment = async () => {
+  const handleConfirmPayment = async (payload) => {
     if (!payingReminder) return;
-    if (!payForm.amount || Number(payForm.amount) <= 0) {
-      showToast('Please enter a valid bill amount', 'error');
-      return;
-    }
 
     setPayConfirming(true);
     try {
-      const { data } = await markReminderPaid(payingReminder._id, {
-        amount: Number(payForm.amount),
-        date: payForm.date,
-        category: payForm.category || undefined,
-      });
+      const { data } = await markReminderPaid(payingReminder._id, payload);
 
       showToast(
         data.data?.alreadyPaid
@@ -433,94 +398,12 @@ const Reminders = () => {
       )}
 
       {/* "I Have Paid This Bill" confirmation dialog (Part 9) */}
-      {payingReminder && (
-        <div className="modal-overlay" onClick={payConfirming ? undefined : handleClosePayDialog}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
-            <div className="modal__header">
-              <h2>Have you paid this bill?</h2>
-              <button type="button" className="modal__close" onClick={handleClosePayDialog} disabled={payConfirming}>
-                <Plus size={20} style={{ transform: 'rotate(45deg)' }} />
-              </button>
-            </div>
-
-            <div style={{ padding: '0 1.5rem 1.5rem' }}>
-              <div
-                style={{
-                  background: 'var(--color-bg-input)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '1rem',
-                  marginBottom: '1.25rem',
-                }}
-              >
-                <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: '1rem' }}>{payingReminder.title}</p>
-                <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
-                  Due {new Date(payingReminder.dueDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-                </p>
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="payAmount">Amount Paid (₹) *</label>
-                <input
-                  id="payAmount"
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  className="form-input"
-                  value={payForm.amount}
-                  onChange={(e) => setPayForm((prev) => ({ ...prev, amount: e.target.value }))}
-                  required
-                />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <div className="form-group">
-                  <label htmlFor="payDate">Payment Date</label>
-                  <input
-                    id="payDate"
-                    type="date"
-                    className="form-input"
-                    value={payForm.date}
-                    onChange={(e) => setPayForm((prev) => ({ ...prev, date: e.target.value }))}
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="payCategory">Category</label>
-                  <select
-                    id="payCategory"
-                    className="form-input"
-                    value={payForm.category}
-                    onChange={(e) => setPayForm((prev) => ({ ...prev, category: e.target.value }))}
-                  >
-                    {EXPENSE_CATEGORIES.map((c) => (
-                      <option key={c.value} value={c.value}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <ul style={{ margin: '1rem 0 0', paddingLeft: '1.1rem', fontSize: '0.85rem', color: 'var(--color-text-muted)', lineHeight: 1.7 }}>
-                <li>The bill will be marked as <strong>PAID</strong></li>
-                <li>An expense will be created</li>
-                <li>This reminder will be removed</li>
-                <li>The AI assistant will reflect the updated status</li>
-              </ul>
-            </div>
-
-            <div className="modal__actions">
-              <button type="button" className="btn btn--ghost" onClick={handleClosePayDialog} disabled={payConfirming}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn--primary" onClick={handleConfirmPayment} disabled={payConfirming}>
-                <CheckCircle2 size={16} />
-                {payConfirming ? 'Recording...' : 'Yes, I Paid It'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <PayBillDialog
+        bill={payingReminder}
+        confirming={payConfirming}
+        onConfirm={handleConfirmPayment}
+        onClose={payConfirming ? undefined : handleClosePayDialog}
+      />
 
       {/* Reminder modal form */}
       {modalOpen && (
