@@ -118,7 +118,7 @@ PAYMENT WORKFLOW ✅ (Part 9 — Explicit "I Have Paid This Bill" confirmation f
 ---
 
 ## Latest Checkpoint
-`LifeVault_PART9_BILL_PAYMENT_WORKFLOW_COMPLETE.zip`
+`LifeVault_PART9_2_VOICE_ASSISTANT_AND_EXPIRY_FIX.zip`
 
 ## Post-Completion Enhancements
 
@@ -590,3 +590,85 @@ mention this" instruction.
 - Non-bill reminders (no amount, not document-sourced) keep the original
   simple complete/reopen checkbox from before Part 8 — only reminders
   that represent an actual bill get the new payment workflow, as intended.
+
+## Post-Completion Bugfix — Stale "Document Expiry" Alert After Payment (Part 9.1)
+
+**Reported issue.** After successfully paying the Electricity Bill via
+the Part 9 "I Have Paid This Bill" flow (the reminder correctly
+disappeared, and the AI Insight card correctly confirmed "...is marked
+as Paid"), the Dashboard's "Needs Your Attention" card still showed
+"Electricity Bill — Document Expiry — Due tomorrow", and the user hadn't
+set any expiry date themselves.
+
+**Root cause.** `documentAIService.js` auto-fills a bill-type document's
+generic `expiryDate` field from its AI-extracted due date at analysis
+time (`document.expiryDate = extracted.dueDate`), purely so the existing
+"expiring soon" UI treatment also surfaces upcoming bill due dates. This
+is why the user never manually set an expiry date but one existed
+anyway. The bug was that **three separate places** read `expiryDate` to
+build "needs attention"/"expiring soon" alerts, and none of them checked
+whether the underlying bill had since been paid:
+1. `insightService.getDashboardStats` → the Dashboard's "Needs Your
+   Attention" card.
+2. `vaultService.getVaultSummary` → the Vault page's "Expiring Soon"
+   section.
+3. `DocumentCard.jsx`'s `isExpiringSoon()`/`isExpired()` → the red
+   expiry badge shown wherever a document card renders (Documents page,
+   Vault page).
+
+**Fix.** All three now check `document.paymentStatus !== 'paid'` before
+treating a document's `expiryDate` as an active alert:
+- `insightService.js`: the document-expiry `checkExpiry()` call is
+  skipped for paid bills (the separate warranty-expiry check is
+  untouched — that's a different concept and still applies regardless of
+  payment status).
+- `vaultService.js`: the `Document.find(...)` query for "expiring soon"
+  now includes `paymentStatus: { $ne: 'paid' }`.
+- `DocumentCard.jsx`: `isExpiringSoon()`/`isExpired()` both return
+  `false` once `paymentStatus === 'paid'`, and the generic "Expires
+  <date>" line is hidden entirely for a paid bill (the existing
+  Paid/Due badge already covers that information without the redundant,
+  now-confusing "Expires" text).
+
+`Timeline.jsx`'s historical "Document Expiration" event (from
+`vaultService.getVaultTimeline`) was deliberately left as-is — it's a
+dated log entry, not an actionable alert, so showing "Electricity Bill
+due Aug 28" as a past-dated timeline event regardless of payment status
+is still accurate and expected.
+
+**Verification.** `npm run build` and backend syntax/boot checks re-run
+clean after this patch.
+
+## Post-Completion Enhancement — Voice Assistant (Part 9.2)
+
+Added voice input and spoken replies to the "Ask LifeVault" chatbot
+(`AI.jsx`), using the browser's native Web Speech API — no new
+dependencies.
+
+- **Voice input:** a mic button in the chat input bar (shown only when
+  `SpeechRecognition`/`webkitSpeechRecognition` is available — Chrome/
+  Edge today). Tapping it starts listening (button pulses red, input
+  placeholder changes to "Listening…"), live-transcribes into the input
+  box as interim results arrive, and auto-submits the question the
+  moment recognition finalizes — a hands-free, single-tap flow rather
+  than requiring a second manual "Send" press. Mic/permission errors
+  surface as a toast rather than failing silently.
+- **Voice replies:** a "Voice replies" toggle in the page header (shown
+  when `window.speechSynthesis` is available — broadly supported).
+  When on, every new assistant response is read aloud automatically via
+  `SpeechSynthesisUtterance` as soon as it arrives. Independently, every
+  assistant message bubble has its own small speaker icon to replay (or
+  stop) that specific reply on demand, regardless of the global toggle.
+- Both voice features fully feature-detect and simply don't render their
+  controls when unsupported by the browser, rather than showing a
+  broken button.
+- Switching chats or leaving the page stops any in-progress
+  listening/speaking, so nothing lingers across navigation.
+- Locale defaults to `en-IN`, matching the app's existing ₹/India
+  context; not currently user-configurable.
+
+**Verification.** `npm run build`: 0 errors. This feature is inherently
+browser-API-driven (`SpeechRecognition`/`speechSynthesis`) and can't be
+exercised headlessly in this sandbox — it should be manually verified in
+Chrome/Edge (mic prompt, live transcription, auto-submit, spoken replies,
+per-message replay) after deploying.

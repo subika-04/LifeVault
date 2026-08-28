@@ -8,6 +8,10 @@ import {
   Menu,
   X,
   AlertCircle,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import {
@@ -21,6 +25,15 @@ import {
 const formatTime = (ts) =>
   new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+// Feature detection — Web Speech API. Recognition (voice input) is
+// Chrome/Edge-only today; synthesis (voice replies) is broadly
+// supported. Both degrade gracefully: the mic/speaker controls simply
+// don't render when unsupported, rather than showing a broken button.
+const SpeechRecognitionCtor =
+  typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
+const speechRecognitionSupported = Boolean(SpeechRecognitionCtor);
+const speechSynthesisSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+
 const AI = () => {
   const { showToast } = useToast();
   const [chats, setChats] = useState([]);
@@ -31,7 +44,11 @@ const AI = () => {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceRepliesEnabled, setVoiceRepliesEnabled] = useState(false);
+  const [speakingIndex, setSpeakingIndex] = useState(null);
   const scrollRef = useRef(null);
+  const recognitionRef = useRef(null);
 
   const loadChats = useCallback(async () => {
     setChatsLoading(true);
@@ -55,9 +72,103 @@ const AI = () => {
     }
   }, [messages, sending]);
 
+  // Stop any in-flight recognition/speech when the page unmounts, so
+  // navigating away never leaves the mic listening or audio playing.
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop();
+      if (speechSynthesisSupported) window.speechSynthesis.cancel();
+    };
+  }, []);
+
+  const stopSpeaking = useCallback(() => {
+    if (speechSynthesisSupported) window.speechSynthesis.cancel();
+    setSpeakingIndex(null);
+  }, []);
+
+  const speakText = useCallback(
+    (text, index = null) => {
+      if (!speechSynthesisSupported || !text) return;
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-IN';
+      utterance.rate = 1;
+      utterance.onend = () => setSpeakingIndex(null);
+      utterance.onerror = () => setSpeakingIndex(null);
+      setSpeakingIndex(index);
+      window.speechSynthesis.speak(utterance);
+    },
+    []
+  );
+
+  const toggleVoiceReplies = () => {
+    setVoiceRepliesEnabled((prev) => {
+      const next = !prev;
+      if (!next) stopSpeaking();
+      return next;
+    });
+  };
+
+  const stopListening = () => {
+    recognitionRef.current?.stop();
+  };
+
+  const startListening = () => {
+    if (!speechRecognitionSupported || listening || sending) return;
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = 'en-IN';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 1;
+
+    let finalTranscript = '';
+
+    recognition.onresult = (event) => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript;
+        } else {
+          interim += transcript;
+        }
+      }
+      setInput((finalTranscript || interim).trim());
+    };
+
+    recognition.onerror = (event) => {
+      setListening(false);
+      if (event.error === 'no-speech' || event.error === 'aborted') return;
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        showToast('Microphone access was blocked — check your browser permissions.', 'error');
+      } else {
+        showToast('Voice input failed. Please try typing instead.', 'error');
+      }
+    };
+
+    recognition.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+      if (finalTranscript.trim()) {
+        submitMessage(finalTranscript.trim());
+      }
+    };
+
+    recognitionRef.current = recognition;
+    setListening(true);
+    recognition.start();
+  };
+
+  const handleMicClick = () => {
+    if (listening) stopListening();
+    else startListening();
+  };
+
   const openChat = async (chatId) => {
     setPanelOpen(false);
     setError(null);
+    stopSpeaking();
     if (!chatId) {
       setActiveChatId(null);
       setMessages([]);
@@ -102,6 +213,14 @@ const AI = () => {
       setActiveChatId(data.data.chatId);
       setMessages(data.data.messages);
       loadChats();
+
+      if (voiceRepliesEnabled) {
+        const latestMessages = data.data.messages;
+        const lastMessage = latestMessages[latestMessages.length - 1];
+        if (lastMessage?.role === 'assistant') {
+          speakText(lastMessage.content, latestMessages.length - 1);
+        }
+      }
     } catch (err) {
       const message = err.response?.data?.message || 'LifeVault AI is unavailable right now. Please try again.';
       setError(message);
@@ -124,14 +243,27 @@ const AI = () => {
           <h1 className="page-title">Ask LifeVault ✨</h1>
           <p className="page-subtitle">Ask questions about your documents, warranties, and spending</p>
         </div>
-        <button
-          type="button"
-          className="btn btn--ghost ai-panel-toggle"
-          onClick={() => setPanelOpen((v) => !v)}
-        >
-          {panelOpen ? <X size={18} /> : <Menu size={18} />}
-          History
-        </button>
+        <div className="ai-header-actions">
+          {speechSynthesisSupported && (
+            <button
+              type="button"
+              className={`btn btn--ghost ai-voice-toggle ${voiceRepliesEnabled ? 'ai-voice-toggle--active' : ''}`}
+              onClick={toggleVoiceReplies}
+              title={voiceRepliesEnabled ? 'Voice replies are on — click to turn off' : 'Turn on spoken replies'}
+            >
+              {voiceRepliesEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+              Voice replies
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn--ghost ai-panel-toggle"
+            onClick={() => setPanelOpen((v) => !v)}
+          >
+            {panelOpen ? <X size={18} /> : <Menu size={18} />}
+            History
+          </button>
+        </div>
       </div>
 
       <div className="ai-layout">
@@ -197,6 +329,16 @@ const AI = () => {
                 <div key={i} className={`ai-message ai-message--${m.role}`}>
                   <div className="ai-message__bubble">
                     <p>{m.content}</p>
+                    {m.role === 'assistant' && speechSynthesisSupported && (
+                      <button
+                        type="button"
+                        className="ai-message__speak"
+                        onClick={() => (speakingIndex === i ? stopSpeaking() : speakText(m.content, i))}
+                        title={speakingIndex === i ? 'Stop reading aloud' : 'Read this reply aloud'}
+                      >
+                        {speakingIndex === i ? <VolumeX size={13} /> : <Volume2 size={13} />}
+                      </button>
+                    )}
                   </div>
                   <span className="ai-message__time">{formatTime(m.timestamp)}</span>
                 </div>
@@ -223,9 +365,20 @@ const AI = () => {
           )}
 
           <form className="ai-chat__input" onSubmit={handleSubmit}>
+            {speechRecognitionSupported && (
+              <button
+                type="button"
+                className={`ai-mic-btn ${listening ? 'ai-mic-btn--listening' : ''}`}
+                onClick={handleMicClick}
+                disabled={sending}
+                title={listening ? 'Stop listening' : 'Ask by voice'}
+              >
+                {listening ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
+            )}
             <input
               type="text"
-              placeholder="Ask about your documents, warranties, spending…"
+              placeholder={listening ? 'Listening… speak your question' : 'Ask about your documents, warranties, spending…'}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={sending}

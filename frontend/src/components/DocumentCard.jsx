@@ -16,7 +16,7 @@ const formatDate = (d) => (d ? new Date(d).toLocaleDateString() : null);
 
 const DocumentCard = ({ document, onEdit, onDelete, onAnalyze, analyzing }) => {
   const isExpiringSoon = () => {
-    if (!document.expiryDate) return false;
+    if (!document.expiryDate || document.paymentStatus === 'paid') return false;
     const expiry = new Date(document.expiryDate);
     const now = new Date();
     const daysUntil = (expiry - now) / (1000 * 60 * 60 * 24);
@@ -24,7 +24,7 @@ const DocumentCard = ({ document, onEdit, onDelete, onAnalyze, analyzing }) => {
   };
 
   const isExpired = () => {
-    if (!document.expiryDate) return false;
+    if (!document.expiryDate || document.paymentStatus === 'paid') return false;
     return new Date(document.expiryDate) < new Date();
   };
 
@@ -52,7 +52,7 @@ const DocumentCard = ({ document, onEdit, onDelete, onAnalyze, analyzing }) => {
         <span>{document.fileName}</span>
       </div>
 
-      {document.expiryDate && (
+      {document.expiryDate && document.paymentStatus !== 'paid' && (
         <div
           className={`document-card__expiry ${
             isExpired()

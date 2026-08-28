@@ -31,6 +31,13 @@ export const getVaultSummary = async (userId) => {
       user: userObjectId,
       isArchived: false,
       expiryDate: { $gte: now, $lte: expiringThreshold },
+      // A bill-type document's expiryDate is often auto-filled from its
+      // AI-extracted due date purely to surface it here — once paid via
+      // the "I Have Paid This Bill" flow, it's no longer "expiring" in
+      // any meaningful sense. paymentStatus is only ever 'paid' for
+      // bill-type documents, so this never affects non-bill expiry
+      // tracking (ID cards, warranties, etc).
+      paymentStatus: { $ne: 'paid' },
     })
       .sort({ expiryDate: 1 })
       .limit(5),

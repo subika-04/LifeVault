@@ -425,9 +425,18 @@ export const getDashboardStats = async (userId) => {
     }
   };
 
-  // 1. Process documents with expiry dates
+  // 1. Process documents with expiry dates. A bill-type document's
+  // `expiryDate` is often auto-filled from its AI-extracted due date
+  // (see documentAIService.js) purely so it surfaces here as an
+  // "expiring soon" alert — once the user has actually paid it via the
+  // "I Have Paid This Bill" flow, that due-date alert is stale and
+  // must stop appearing (the warranty-expiry check below is a
+  // separate, unrelated concept and still applies regardless of
+  // payment status).
   documents.forEach((doc) => {
-    checkExpiry(doc.expiryDate, doc.title, 'Document Expiry', doc._id);
+    if (doc.paymentStatus !== 'paid') {
+      checkExpiry(doc.expiryDate, doc.title, 'Document Expiry', doc._id);
+    }
     if (doc.aiData?.warrantyExpiryDate) {
       checkExpiry(doc.aiData.warrantyExpiryDate, `${doc.title} (Warranty)`, 'Warranty Expiry', doc._id);
     }

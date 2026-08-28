@@ -1966,6 +1966,7 @@ select.form-input {
   background: var(--color-bg-input);
   border: 1px solid var(--color-border);
   border-bottom-left-radius: var(--radius-sm);
+  padding-right: 2rem;
 }
 
 .ai-message__bubble--typing {
@@ -2050,6 +2051,87 @@ select.form-input {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+/* ---- Voice assistant (voice input + spoken replies) ---- */
+
+.ai-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.ai-voice-toggle--active {
+  color: var(--color-primary-300);
+  border-color: rgba(99, 102, 241, 0.4);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.ai-mic-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-input);
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background var(--transition-base), border-color var(--transition-base), color var(--transition-base);
+}
+
+.ai-mic-btn:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-border-focus);
+}
+
+.ai-mic-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ai-mic-btn--listening {
+  color: #fff;
+  background: #ef4444;
+  border-color: #ef4444;
+  animation: ai-mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ai-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45); }
+  50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+}
+
+.ai-message__bubble {
+  position: relative;
+}
+
+.ai-message__speak {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: inherit;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.ai-message__speak:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-mic-btn--listening {
+    animation: none;
+  }
 }
 
 /* ---- Responsive ---- */
