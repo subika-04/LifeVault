@@ -429,6 +429,18 @@ export const getDashboardStats = async (userId) => {
     }
   };
 
+  // A document that already has its own active Reminder (auto-created
+  // from it, or manually linked) would otherwise produce two separate
+  // Needs Attention entries for the exact same underlying bill — one
+  // from the document's own due-date-as-expiryDate, one from the
+  // reminder's dueDate. The Reminder is the more authoritative,
+  // user-facing representation (its title/amount reflect the actual
+  // "what to pay" record), so it wins; the document-level duplicate is
+  // skipped here.
+  const documentIdsWithActiveReminder = new Set(
+    reminders.filter((r) => r.document).map((r) => String(r.document))
+  );
+
   // 1. Process documents with expiry dates. A bill-type document's
   // `expiryDate` is often auto-filled from its AI-extracted due date
   // (see documentAIService.js) purely so it surfaces here as an
@@ -438,7 +450,7 @@ export const getDashboardStats = async (userId) => {
   // separate, unrelated concept and still applies regardless of
   // payment status).
   documents.forEach((doc) => {
-    if (doc.paymentStatus !== 'paid') {
+    if (doc.paymentStatus !== 'paid' && !documentIdsWithActiveReminder.has(String(doc._id))) {
       // A document with an AI-extracted due date is a payable bill (the
       // Dashboard offers "I Have Paid This Bill"); one without is a
       // plain expiring document — an ID card, license, policy scan,

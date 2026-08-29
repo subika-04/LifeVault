@@ -17,6 +17,7 @@ import { markReminderPaid } from '../services/reminderService';
 import { createDocument, markDocumentPaid } from '../services/documentService';
 import PayBillDialog from '../components/PayBillDialog';
 import UploadDocumentModal from '../components/UploadDocumentModal';
+import { payButtonLabel } from '../utils/billLabel';
 
 const CATEGORY_LABELS = {
   identity: 'Identity',
@@ -309,7 +310,7 @@ const Dashboard = () => {
                         onClick={() => handleOpenPay(item)}
                       >
                         <IndianRupee size={13} />
-                        I Have Paid This Bill
+                        {payButtonLabel(item.title)}
                       </button>
                     )}
                     {item.isRenewable && (

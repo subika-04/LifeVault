@@ -118,7 +118,7 @@ PAYMENT WORKFLOW ✅ (Part 9 — Explicit "I Have Paid This Bill" confirmation f
 ---
 
 ## Latest Checkpoint
-`LifeVault_PART9_3_DASHBOARD_BILL_AND_RENEWAL_ACTIONS.zip`
+`LifeVault_PART9_4_DEDUP_AND_CUSTOM_WORDING.zip`
 
 ## Post-Completion Enhancements
 
@@ -775,3 +775,52 @@ been exercised against a live Atlas connection in this sandbox — a real
 end-to-end check (pay a bill via the Dashboard button, renew a document
 via the Dashboard button, confirm both in MongoDB directly) is
 recommended after deploying.
+
+## Post-Completion Bugfix — Duplicate Needs-Attention Entry + Custom Button Wording (Part 9.4)
+
+**Reported issue.** The Dashboard's Needs Your Attention card showed the
+same underlying bill (a health insurance renewal) twice: once as
+"Health Insurance — Document Expiry" and once as "Renew insurance —
+Reminder Due", both with matching due dates and both offering an "I Have
+Paid This Bill" button. Also requested: contextual button wording (e.g.
+"I Have Paid Insurance Bill") instead of the generic "I Have Paid This
+Bill" everywhere.
+
+**Root cause of the duplicate.** When a bill-type document is analyzed,
+`reminderService.createReminderFromDocument` auto-creates a linked
+Reminder (`reminder.document = document._id`) with its own
+independently-generated title (e.g. "Renew insurance" vs. the document's
+own title "Health Insurance"). `insightService.getDashboardStats` was
+checking the document's `expiryDate` and every pending reminder's
+`dueDate` completely independently, with no awareness that a
+document-sourced reminder represents the *same* underlying bill as its
+source document — so the same bill produced two separate Needs
+Attention entries.
+
+**Fix.** Before processing documents, `getDashboardStats` now builds a
+set of document IDs that already have an active (`isCompleted: false`)
+Reminder pointing to them (`reminder.document`). A document's own
+"Document Expiry" check is skipped whenever its id is in that set — the
+Reminder-based entry (the more authoritative, user-facing "what to pay"
+record) is the one shown. This only affects documents that have a
+linked active reminder; a document with no reminder (or whose reminder
+was already resolved) still surfaces its own expiry alert exactly as
+before, and the Warranty Expiry check is untouched (unrelated concept).
+
+**Custom button wording.** New `frontend/src/utils/billLabel.js`
+(`deriveBillLabel`, `payButtonLabel`) strips the generic
+verb prefix ("Pay ", "Renew ", "Action Required for ") and any
+" (Warranty)" suffix from a reminder/document title, title-cases what's
+left, and produces a label like "I Have Paid Electricity Bill" or
+"I Have Paid Health Insurance" instead of the generic "I Have Paid This
+Bill". Applied to the trigger buttons on both the Dashboard's Needs Your
+Attention card and the Reminders page, and to the `PayBillDialog`'s
+header ("Have you paid your Health Insurance?") for consistency. Falls
+back to the original generic wording if a title is somehow empty.
+
+**Verification.** Standalone harness: 8/8 passed — dedup set correctly
+includes/excludes documents by reminder linkage, and label derivation
+correctly handles the exact reported case ("Health Insurance" /
+"Renew insurance") plus existing Part 8/9 bill examples (electricity,
+internet), an empty-title fallback, and warranty-suffix stripping.
+`npm run build`: 0 errors. Backend: syntax-clean, boots without errors.

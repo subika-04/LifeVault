@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Plus, CheckCircle2 } from 'lucide-react';
 import { EXPENSE_CATEGORIES } from '../services/expenseService';
+import { deriveBillLabel } from '../utils/billLabel';
 
 // Mirrors billPaymentService.mapToExpenseCategory on the backend — only
 // used to pre-fill the dialog nicely; the backend re-derives this itself
@@ -60,7 +61,7 @@ const PayBillDialog = ({ bill, onConfirm, onClose, confirming }) => {
     <div className="modal-overlay" onClick={confirming ? undefined : onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
         <div className="modal__header">
-          <h2>Have you paid this bill?</h2>
+          <h2>Have you paid your {deriveBillLabel(bill.title)}?</h2>
           <button type="button" className="modal__close" onClick={onClose} disabled={confirming}>
             <Plus size={20} style={{ transform: 'rotate(45deg)' }} />
           </button>

@@ -4,6 +4,7 @@ import { getReminders, createReminder, updateReminder, deleteReminder, markRemin
 import { useToast } from '../context/ToastContext';
 import EmptyState from '../components/EmptyState';
 import PayBillDialog from '../components/PayBillDialog';
+import { payButtonLabel } from '../utils/billLabel';
 
 const Reminders = () => {
   const { showToast } = useToast();
@@ -370,7 +371,7 @@ const Reminders = () => {
                         onClick={() => handleOpenPayDialog(reminder)}
                       >
                         <Receipt size={14} />
-                        I Have Paid This Bill
+                        {payButtonLabel(reminder.title)}
                       </button>
                     )}
                     <button
